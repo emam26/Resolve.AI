@@ -17,6 +17,11 @@ ShipmentStatus = Literal["not_shipped", "in_transit", "delayed", "delivered"]
 ConversationChannel = Literal["widget"]
 ConversationState = Literal["AI_ACTIVE", "HANDOFF_QUEUED", "HUMAN_ACTIVE", "RESOLVED"]
 MessageAuthorType = Literal["customer", "assistant", "staff"]
+RefundState = Literal[
+    "PENDING_REVIEW",
+    "APPROVED_EXTERNAL_ACTION_REQUIRED",
+    "REJECTED",
+]
 
 
 class ContractModel(BaseModel):
@@ -60,6 +65,44 @@ class ConversationSummary(ContractModel):
     state: ConversationState
     order_id: str | None
     messages: list[Message]
+
+
+class SupportConversationSummary(ContractModel):
+    """Staff view adds ownership and assignment without changing the widget shape."""
+
+    conversation_id: str
+    channel: ConversationChannel
+    state: ConversationState
+    order_id: str | None
+    customer_id: str
+    assigned_staff_id: str | None
+    messages: list[Message]
+
+
+class SupportInboxResponse(ContractModel):
+    conversations: list[SupportConversationSummary]
+
+
+class CreateRefundRequest(ContractModel):
+    amount_cents: int = Field(gt=0)
+    reason: str = Field(min_length=1)
+    idempotency_key: str = Field(min_length=1)
+
+
+class RefundSummary(ContractModel):
+    refund_id: str
+    conversation_id: str
+    order_id: str
+    amount_cents: int
+    reason: str
+    state: RefundState
+    requested_by: str
+    decided_by: str | None
+    decision_note: str | None
+
+
+class RefundListResponse(ContractModel):
+    refunds: list[RefundSummary]
 
 
 class AppendMessageRequest(ContractModel):
