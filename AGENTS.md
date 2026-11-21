@@ -21,6 +21,12 @@ Build a **lean, working** AI customer-operations application for one fictional m
 - **Independent Reviewer (Agent 4):** **read-only**; checks correctness, security, contract compliance, testing, simplicity, redundant work and agent-efficiency. Reports findings to lead; never edits.
 - `spawn_agent` is available in the previously verified Codex IDE session, but agent spawn is not filesystem isolation. Never have two writers edit the same file. Delegate fewer workers if work is dependent or concurrency limits apply. Route worker coordination through lead. Follow `docs/TEAM_WORKFLOW.md`.
 
+## Voice notifications
+- Only the Lead Engineer may call the existing `scripts/notify.ps1`; workers and reviewers must report through the lead.
+- At meaningful milestone checkpoints, call it with `-Event done`, `-Event review`, or `-Event blocked` and the milestone identifier.
+- Do not announce routine progress, individual worker completions, or every test result. Notify at most once per event per milestone unless the status genuinely changes.
+- If speech fails, report the failure in text and continue; voice is never a development blocker.
+
 ## Reuse-first and token discipline
 1. For a nontrivial task, inspect `docs/PROJECT_STATE.md` (completed work / known files / test commands) and `docs/CONTRACTS.md` (interfaces); read only the relevant portions of `docs/PRODUCT_CONTEXT.md` and source files. Do not paste all documentation into every subagent prompt.
 2. Search the relevant existing code/tests (`rg`/`git grep` scoped to directories) before implementing. **Use existing functions, fixtures, tests, and skills when they already solve the problem.** Do not regenerate a feature because a fresh prompt forgot it existed.
@@ -32,7 +38,10 @@ Build a **lean, working** AI customer-operations application for one fictional m
 
 ## Autonomous work boundaries
 - For an **approved bounded milestone**: plan, delegate selectively, edit assigned files, test, read-only review, fix verified issues, and report results without asking at every step.
-- Approval required for: major architecture/scope changes, significant dependencies, paid/network API actions, secrets, destructive data operations, remote pushes/PR merges, and deployment. Do not remove unknown existing files.
+- M0 approval is no longer a stopping requirement. Continue autonomously through the approved M1 and M2 milestones using Plan -> Delegate -> Implement -> Test -> Independent Review -> Fix -> Verify.
+- Ordinary free local development dependencies already justified by the approved stack (including FastAPI, SQLAlchemy, Alembic, pytest, and required frontend packages) are standing-authorized. Approval remains required for major architecture/scope changes, significant or unrelated dependencies, paid/authenticated network API actions, secrets, destructive data operations, remote pushes/PR merges, and deployment. Do not remove unknown existing files.
+- Use three development workers when parallel work is beneficial and one read-only reviewer at meaningful checkpoints. Do not spawn unnecessary agents or run paid LLM evaluations.
+- Pause only work requiring credentials, paid API usage, destructive operations, significant architecture changes, or human judgment; continue unrelated safe work where possible.
 - Never claim an API call/test/browser check passed unless actually executed. Report unverified areas clearly. Never weaken security checks just to pass tests.
 - Quality gates: authorization/ownership tests; published policy/version citations; human takeover blocking AI; refund state and duplicate protection; API contract parity; least relevant passing tests; honest demo labels.
 
