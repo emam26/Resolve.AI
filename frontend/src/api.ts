@@ -40,6 +40,41 @@ export interface ConversationResponse {
   messages: ConversationMessage[];
 }
 
+export interface SupportConversationSummary {
+  conversation_id: string;
+  channel: ConversationResponse["channel"];
+  state: ConversationState;
+  order_id: string | null;
+  customer_id: string | null;
+  assigned_staff_id: string | null;
+  messages: ConversationMessage[];
+}
+
+export interface SupportInboxResponse {
+  conversations: SupportConversationSummary[];
+}
+
+export type RefundState =
+  | "PENDING_REVIEW"
+  | "APPROVED_EXTERNAL_ACTION_REQUIRED"
+  | "REJECTED";
+
+export interface RefundSummary {
+  refund_id: string;
+  conversation_id: string;
+  order_id: string;
+  amount_cents: number;
+  reason: string;
+  state: RefundState;
+  requested_by: string;
+  decided_by: string | null;
+  decision_note: string | null;
+}
+
+export interface RefundListResponse {
+  refunds: RefundSummary[];
+}
+
 export interface AppendMessageResponse {
   conversation_id: string;
   state: ConversationState;
@@ -121,6 +156,20 @@ export function loginDemoCustomer(): Promise<DemoLoginResponse> {
   });
 }
 
+export function loginDemoSupport(): Promise<DemoLoginResponse> {
+  return requestJson<DemoLoginResponse>("/api/v1/auth/demo-login", {
+    method: "POST",
+    body: JSON.stringify({ demo_actor_id: "support_001" }),
+  });
+}
+
+export function loginDemoRefundApprover(): Promise<DemoLoginResponse> {
+  return requestJson<DemoLoginResponse>("/api/v1/auth/demo-login", {
+    method: "POST",
+    body: JSON.stringify({ demo_actor_id: "refund_approver_001" }),
+  });
+}
+
 export function createWidgetConversation(
   sessionId: string,
   orderId: string | null,
@@ -146,6 +195,78 @@ export function appendCustomerMessage(
       method: "POST",
       body: JSON.stringify({ content }),
     },
+    sessionId,
+  );
+}
+
+export function handoffCustomerConversation(
+  sessionId: string,
+  conversationId: string,
+): Promise<ConversationResponse> {
+  return requestJson<ConversationResponse>(
+    `/api/v1/conversations/${encodeURIComponent(conversationId)}/handoff`,
+    { method: "POST" },
+    sessionId,
+  );
+}
+
+export function getSupportInbox(sessionId: string): Promise<SupportInboxResponse> {
+  return requestJson<SupportInboxResponse>("/api/v1/support/inbox", {}, sessionId);
+}
+
+export function claimSupportConversation(
+  sessionId: string,
+  conversationId: string,
+): Promise<SupportConversationSummary> {
+  return requestJson<SupportConversationSummary>(
+    `/api/v1/support/conversations/${encodeURIComponent(conversationId)}/claim`,
+    { method: "POST" },
+    sessionId,
+  );
+}
+
+export function appendSupportMessage(
+  sessionId: string,
+  conversationId: string,
+  content: string,
+): Promise<AppendMessageResponse> {
+  return requestJson<AppendMessageResponse>(
+    `/api/v1/support/conversations/${encodeURIComponent(conversationId)}/messages`,
+    {
+      method: "POST",
+      body: JSON.stringify({ content }),
+    },
+    sessionId,
+  );
+}
+
+export function resolveSupportConversation(
+  sessionId: string,
+  conversationId: string,
+): Promise<SupportConversationSummary> {
+  return requestJson<SupportConversationSummary>(
+    `/api/v1/support/conversations/${encodeURIComponent(conversationId)}/resolve`,
+    { method: "POST" },
+    sessionId,
+  );
+}
+
+export function getRefunds(sessionId: string): Promise<RefundListResponse> {
+  return requestJson<RefundListResponse>("/api/v1/refunds", {}, sessionId);
+}
+
+export function approveRefund(sessionId: string, refundId: string): Promise<RefundSummary> {
+  return requestJson<RefundSummary>(
+    `/api/v1/refunds/${encodeURIComponent(refundId)}/approve`,
+    { method: "POST" },
+    sessionId,
+  );
+}
+
+export function rejectRefund(sessionId: string, refundId: string): Promise<RefundSummary> {
+  return requestJson<RefundSummary>(
+    `/api/v1/refunds/${encodeURIComponent(refundId)}/reject`,
+    { method: "POST" },
     sessionId,
   );
 }
