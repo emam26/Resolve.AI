@@ -2,23 +2,35 @@
 
 import os
 
-from fastapi import FastAPI, Header, Request
+from fastapi import Body, FastAPI, Header, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.routing import APIRouter
+from pydantic import BaseModel, ConfigDict, Field
 
 from backend.app.contracts import (
     AppendMessageRequest,
     AppendMessageResponse,
     ConversationSummary,
     CreateConversationRequest,
+    CreateRefundRequest,
     DemoLoginRequest,
     DemoLoginResponse,
     ErrorResponse,
     OrderSummary,
+    RefundListResponse,
+    RefundSummary,
+    SupportConversationSummary,
+    SupportInboxResponse,
 )
-from backend.app.services import InMemoryResolveService
+from backend.app.services.in_memory import (
+    ConversationStateConflict,
+    ForbiddenOperation,
+    IdempotencyConflict,
+    InMemoryResolveService,
+    RefundValidationError,
+)
 
 
 UNAUTHENTICATED = {
@@ -42,8 +54,14 @@ def _bearer_token(authorization: str | None) -> str | None:
     return token
 
 
-def create_app() -> FastAPI:
-    """Create an isolated API application with a fresh synthetic data store."""
+class _RefundDecisionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    note: str | None = Field(default=None, max_length=500)
+
+
+def create_app(database_url: str | None = None) -> FastAPI:
+    """Create an API application with configurable local conversation storage."""
 
     app = FastAPI()
     configured_origins = os.getenv(
@@ -58,7 +76,10 @@ def create_app() -> FastAPI:
         allow_methods=["GET", "POST", "OPTIONS"],
         allow_headers=["Accept", "Authorization", "Content-Type"],
     )
-    service = InMemoryResolveService()
+    configured_database_url = database_url or os.getenv(
+        "RESOLVEAI_DATABASE_URL", "sqlite+pysqlite:///:memory:"
+    )
+    service = InMemoryResolveService(configured_database_url)
     app.state.service = service
     router = APIRouter(prefix="/api/v1")
 
@@ -123,7 +144,10 @@ def create_app() -> FastAPI:
         actor = current_actor(authorization)
         if actor is None:
             return _error(401, UNAUTHENTICATED["code"], UNAUTHENTICATED["message"])
-        conversation = service.create_conversation(request, actor)
+        try:
+            conversation = service.create_conversation(request, actor)
+        except ForbiddenOperation as exc:
+            return _error(403, "forbidden", str(exc))
         if conversation is None:
             return _error(404, "order_not_found", "The requested order was not found.")
         return conversation
@@ -143,7 +167,10 @@ def create_app() -> FastAPI:
             return _error(401, UNAUTHENTICATED["code"], UNAUTHENTICATED["message"])
         if not request.content.strip():
             return _error(422, "message_required", "A message is required.")
-        response = service.append_message(conversation_id, request.content, actor)
+        try:
+            response = service.append_message(conversation_id, request.content, actor)
+        except ConversationStateConflict as exc:
+            return _error(409, "conversation_state_conflict", str(exc))
         if response is None:
             return _error(
                 404,
@@ -151,6 +178,204 @@ def create_app() -> FastAPI:
                 "The requested conversation was not found.",
             )
         return response
+
+    @router.post(
+        "/conversations/{conversation_id}/handoff",
+        response_model=ConversationSummary,
+    )
+    async def handoff_conversation(
+        conversation_id: str, authorization: str | None = Header(default=None)
+    ):
+        actor = current_actor(authorization)
+        if actor is None:
+            return _error(401, UNAUTHENTICATED["code"], UNAUTHENTICATED["message"])
+        try:
+            conversation = service.handoff(conversation_id, actor)
+        except ConversationStateConflict as exc:
+            return _error(409, "conversation_state_conflict", str(exc))
+        if conversation is None:
+            return _error(
+                404,
+                "conversation_not_found",
+                "The requested conversation was not found.",
+            )
+        return conversation
+
+    @router.get("/support/inbox", response_model=SupportInboxResponse)
+    async def support_inbox(authorization: str | None = Header(default=None)):
+        actor = current_actor(authorization)
+        if actor is None:
+            return _error(401, UNAUTHENTICATED["code"], UNAUTHENTICATED["message"])
+        try:
+            return service.support_inbox(actor)
+        except ForbiddenOperation as exc:
+            return _error(403, "forbidden", str(exc))
+
+    @router.post(
+        "/support/conversations/{conversation_id}/claim",
+        response_model=SupportConversationSummary,
+    )
+    async def claim_conversation(
+        conversation_id: str, authorization: str | None = Header(default=None)
+    ):
+        actor = current_actor(authorization)
+        if actor is None:
+            return _error(401, UNAUTHENTICATED["code"], UNAUTHENTICATED["message"])
+        try:
+            conversation = service.claim(conversation_id, actor)
+        except ForbiddenOperation as exc:
+            return _error(403, "forbidden", str(exc))
+        except ConversationStateConflict as exc:
+            return _error(409, "conversation_state_conflict", str(exc))
+        if conversation is None:
+            return _error(
+                404,
+                "conversation_not_found",
+                "The requested conversation was not found.",
+            )
+        return conversation
+
+    @router.post(
+        "/support/conversations/{conversation_id}/messages",
+        response_model=AppendMessageResponse,
+        status_code=201,
+    )
+    async def append_staff_message(
+        conversation_id: str,
+        request: AppendMessageRequest,
+        authorization: str | None = Header(default=None),
+    ):
+        actor = current_actor(authorization)
+        if actor is None:
+            return _error(401, UNAUTHENTICATED["code"], UNAUTHENTICATED["message"])
+        if not request.content.strip():
+            return _error(422, "message_required", "A message is required.")
+        try:
+            response = service.append_staff_message(conversation_id, request.content, actor)
+        except ForbiddenOperation as exc:
+            return _error(403, "forbidden", str(exc))
+        except ConversationStateConflict as exc:
+            return _error(409, "conversation_state_conflict", str(exc))
+        if response is None:
+            return _error(
+                404,
+                "conversation_not_found",
+                "The requested conversation was not found.",
+            )
+        return response
+
+    @router.post(
+        "/support/conversations/{conversation_id}/resolve",
+        response_model=SupportConversationSummary,
+    )
+    async def resolve_conversation(
+        conversation_id: str, authorization: str | None = Header(default=None)
+    ):
+        actor = current_actor(authorization)
+        if actor is None:
+            return _error(401, UNAUTHENTICATED["code"], UNAUTHENTICATED["message"])
+        try:
+            conversation = service.resolve(conversation_id, actor)
+        except ForbiddenOperation as exc:
+            return _error(403, "forbidden", str(exc))
+        except ConversationStateConflict as exc:
+            return _error(409, "conversation_state_conflict", str(exc))
+        if conversation is None:
+            return _error(
+                404,
+                "conversation_not_found",
+                "The requested conversation was not found.",
+            )
+        return conversation
+
+    @router.post(
+        "/support/conversations/{conversation_id}/refunds",
+        response_model=RefundSummary,
+        status_code=201,
+    )
+    async def create_refund(
+        conversation_id: str,
+        request: CreateRefundRequest,
+        authorization: str | None = Header(default=None),
+    ):
+        actor = current_actor(authorization)
+        if actor is None:
+            return _error(401, UNAUTHENTICATED["code"], UNAUTHENTICATED["message"])
+        try:
+            result = service.create_refund(conversation_id, request, actor)
+        except ForbiddenOperation as exc:
+            return _error(403, "forbidden", str(exc))
+        except ConversationStateConflict as exc:
+            return _error(409, "conversation_state_conflict", str(exc))
+        except IdempotencyConflict as exc:
+            return _error(409, "idempotency_conflict", str(exc))
+        except RefundValidationError as exc:
+            return _error(422, "refund_validation_error", str(exc))
+        if result is None:
+            return _error(
+                404,
+                "conversation_not_found",
+                "The requested conversation or linked order was not found.",
+            )
+        refund, created = result
+        if not created:
+            return JSONResponse(
+                status_code=200,
+                content=refund.model_dump(mode="json"),
+            )
+        return refund
+
+    @router.get("/refunds", response_model=RefundListResponse)
+    async def list_refunds(authorization: str | None = Header(default=None)):
+        actor = current_actor(authorization)
+        if actor is None:
+            return _error(401, UNAUTHENTICATED["code"], UNAUTHENTICATED["message"])
+        try:
+            return service.list_refunds(actor)
+        except ForbiddenOperation as exc:
+            return _error(403, "forbidden", str(exc))
+
+    async def _decide_refund(
+        refund_id: str,
+        decision: str,
+        body: _RefundDecisionRequest | None,
+        authorization: str | None,
+    ):
+        actor = current_actor(authorization)
+        if actor is None:
+            return _error(401, UNAUTHENTICATED["code"], UNAUTHENTICATED["message"])
+        try:
+            refund = service.decide_refund(
+                refund_id,
+                actor=actor,
+                decision=decision,
+                note=None if body is None else body.note,
+            )
+        except ForbiddenOperation as exc:
+            return _error(403, "forbidden", str(exc))
+        except ConversationStateConflict as exc:
+            return _error(409, "refund_state_conflict", str(exc))
+        except RefundValidationError as exc:
+            return _error(422, "refund_validation_error", str(exc))
+        if refund is None:
+            return _error(404, "refund_not_found", "The requested refund was not found.")
+        return refund
+
+    @router.post("/refunds/{refund_id}/approve", response_model=RefundSummary)
+    async def approve_refund(
+        refund_id: str,
+        body: _RefundDecisionRequest | None = Body(default=None),
+        authorization: str | None = Header(default=None),
+    ):
+        return await _decide_refund(refund_id, "approve", body, authorization)
+
+    @router.post("/refunds/{refund_id}/reject", response_model=RefundSummary)
+    async def reject_refund(
+        refund_id: str,
+        body: _RefundDecisionRequest | None = Body(default=None),
+        authorization: str | None = Header(default=None),
+    ):
+        return await _decide_refund(refund_id, "reject", body, authorization)
 
     @router.get("/conversations/{conversation_id}", response_model=ConversationSummary)
     async def get_conversation(
