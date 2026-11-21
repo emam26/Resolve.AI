@@ -4,7 +4,7 @@
 
 ## Current workspace (Lead-verified)
 - Root guidance, product docs, prompt templates, local skills, design references, and the existing `scripts/notify.ps1` are present.
-- Git is initialized locally; there is no remote or Git worktree. The current milestone changes are being committed locally only.
+- Git is initialized locally and the verified V1 work is published on the dedicated `codex/v1-local-complete` branch at `origin`; no additional Git worktree is used.
 - `j.py` was not present during these inspections; it was not recreated or removed.
 - A local `.venv` contains the approved backend set: FastAPI, Uvicorn, HTTPX, pytest, Pydantic, SQLAlchemy, Alembic, pgvector, psycopg, sentence-transformers, and LangGraph. Frontend dependencies are installed from `frontend/package.json` and locked in `frontend/package-lock.json`.
 - No paid LLM, embedding, commerce, authenticated external API, or deployment action was performed. Docker/PostgreSQL are unavailable in this environment.
