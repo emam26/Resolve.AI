@@ -236,6 +236,57 @@ Success `200 OK`:
 - `assistant_reply`, `evidence`, and `handoff_reason` are explicit M1 response fields and remain empty/null until a later approved capability supplies them.
 - A customer may read and append only to conversations established for that customer session.
 
+### M3 frozen contract: handoff, support inbox and human takeover
+
+M3 preserves the M1 widget response shapes and adds server-authored staff
+workflow routes. The only valid conversation transition path is
+`AI_ACTIVE -> HANDOFF_QUEUED -> HUMAN_ACTIVE -> RESOLVED`.
+
+- `POST /api/v1/conversations/{conversation_id}/handoff`: authenticated
+  customer owner only; `AI_ACTIVE` becomes `HANDOFF_QUEUED` and returns the
+  existing `ConversationSummary` shape. Invalid state returns `409`.
+- `GET /api/v1/support/inbox`: `support_agent` only; returns
+  `{ "conversations": [SupportConversationSummary] }` for queued or human-
+  active conversations.
+- `POST /api/v1/support/conversations/{conversation_id}/claim`:
+  `support_agent` only; atomically claims a queued conversation and returns
+  `SupportConversationSummary` in `HUMAN_ACTIVE`. A second claim returns
+  `409`.
+- `POST /api/v1/support/conversations/{conversation_id}/messages`:
+  assigned support agent only; appends a staff-authored message in
+  `HUMAN_ACTIVE`, with `assistant_reply: null`.
+- `POST /api/v1/support/conversations/{conversation_id}/resolve`:
+  assigned support agent only; transitions `HUMAN_ACTIVE` to `RESOLVED`.
+
+Customer and staff ownership/role checks are server-side. Resolved
+conversations are read-only (`409`), and no route in M3 performs an automated
+reply or external payment operation. Conversation/message storage uses the
+SQLAlchemy repository with a configurable database URL; local tests use
+SQLite, while PostgreSQL execution and migrations remain unverified.
+
+### M4 frozen contract: simulated refund review
+
+M4 records a review decision only. It never calls a payment provider and never
+creates a `REFUNDED` state.
+
+- `POST /api/v1/support/conversations/{conversation_id}/refunds`: assigned
+  `support_agent` in `HUMAN_ACTIVE` creates a pending request with
+  `amount_cents`, `reason`, and `idempotency_key`; the linked order must be
+  owned by the conversation and the amount must be within the synthetic
+  refundable limit. Repeating the same idempotency key returns the same pending
+  record.
+- `GET /api/v1/refunds`: `refund_approver` only; lists review records.
+- `POST /api/v1/refunds/{refund_id}/approve`: a separate
+  `refund_approver` transitions `PENDING_REVIEW` to
+  `APPROVED_EXTERNAL_ACTION_REQUIRED` and records the approver.
+- `POST /api/v1/refunds/{refund_id}/reject`: a separate
+  `refund_approver` transitions `PENDING_REVIEW` to `REJECTED` and records the
+  approver.
+
+Support agents cannot approve their own requests, merchant admin is not
+implicitly an approver, duplicate pending creation is idempotent, and all
+invalid state/role/amount actions return an error rather than a success.
+
 ### M2 frozen contract: published policy evidence and grounded answer
 
 M2 introduces an internal, deterministic policy service contract. It is not a public route yet and must not call a paid model or expose draft/internal evidence to customers.
