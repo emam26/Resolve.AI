@@ -19,3 +19,6 @@ coverage/
 Thumbs.db
 # Local IDE/session output
 *.log
+# Internal Codex workflow materials (keep locally, do not publish)
+/prompts/
+/references/
