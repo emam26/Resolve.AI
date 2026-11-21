@@ -134,6 +134,151 @@ The first implementation may support only customer self-access. Staff access lin
 - `estimated_delivery_date` is an ISO date or `null`.
 - The shared error envelope is `{ "error": { "code": string, "message": string, "details": object } }`.
 
+### M1 frozen contract: authenticated widget inquiry
+
+M1 adds a deterministic transcript handshake to the M0 identity and order contract. M1 does not call an LLM or claim a grounded answer; `assistant_reply` remains `null` until M2.
+
+#### Begin conversation
+
+`POST /api/v1/conversations`
+
+Authentication: `Authorization: Bearer demo-session-customer_001`
+
+Request:
+
+```json
+{
+  "channel": "widget",
+  "order_id": "order_1001"
+}
+```
+
+`order_id` may be `null` for a public-policy conversation. When present, the server verifies ownership before creating the conversation.
+
+Success `201 Created`:
+
+```json
+{
+  "conversation_id": "conv_1001",
+  "channel": "widget",
+  "state": "AI_ACTIVE",
+  "order_id": "order_1001",
+  "messages": []
+}
+```
+
+Foreign or missing order `404 Not Found` uses the M0 `order_not_found` envelope. Missing or invalid session uses the M0 `unauthenticated` envelope.
+
+#### Append a customer message
+
+`POST /api/v1/conversations/{conversation_id}/messages`
+
+Authentication: `Authorization: Bearer demo-session-customer_001`
+
+Request:
+
+```json
+{
+  "content": "Where is my order?"
+}
+```
+
+Success `201 Created`:
+
+```json
+{
+  "conversation_id": "conv_1001",
+  "state": "AI_ACTIVE",
+  "message": {
+    "message_id": "msg_1001",
+    "author_type": "customer",
+    "content": "Where is my order?",
+    "created_at": "2026-11-21T12:00:00Z"
+  },
+  "assistant_reply": null,
+  "evidence": [],
+  "handoff_reason": null
+}
+```
+
+The server supplies `author_type`, identity, state, timestamps, and evidence. The client cannot submit a staff role, assistant response, citation, or handoff state. Empty content is `422 message_required`; a foreign/missing conversation is `404 conversation_not_found`.
+
+#### Read a conversation
+
+`GET /api/v1/conversations/{conversation_id}`
+
+Authentication: `Authorization: Bearer demo-session-customer_001`
+
+Success `200 OK`:
+
+```json
+{
+  "conversation_id": "conv_1001",
+  "channel": "widget",
+  "state": "AI_ACTIVE",
+  "order_id": "order_1001",
+  "messages": [
+    {
+      "message_id": "msg_1001",
+      "author_type": "customer",
+      "content": "Where is my order?",
+      "created_at": "2026-11-21T12:00:00Z"
+    }
+  ]
+}
+```
+
+#### M1 conversation constraints
+
+- `channel` is `widget`.
+- `state` is initially `AI_ACTIVE`; later state transitions remain server-controlled.
+- `author_type` is `customer` for M1-created messages; no client-supplied author is accepted.
+- `assistant_reply`, `evidence`, and `handoff_reason` are explicit M1 response fields and remain empty/null until a later approved capability supplies them.
+- A customer may read and append only to conversations established for that customer session.
+
+### M2 frozen contract: published policy evidence and grounded answer
+
+M2 introduces an internal, deterministic policy service contract. It is not a public route yet and must not call a paid model or expose draft/internal evidence to customers.
+
+`retrieve_published_policy(query, audience, top_k=3)` returns a ranked list of:
+
+```json
+{
+  "document_id": "delivery-policy",
+  "document_version": "v2",
+  "section": "Delayed shipments",
+  "release_id": "release_2026_11_01",
+  "visibility": "public",
+  "score": 2.0,
+  "text": "If a shipment is delayed, customers may contact support for an updated estimate."
+}
+```
+
+Required filtering: `status` must be `published`; `audience="customer"` may receive only `visibility="public"`; results are ordered by deterministic descending score with stable tie-breaking; `top_k` is positive. No sufficient evidence returns an empty list.
+
+`answer_from_published_policy(query, audience="customer")` returns:
+
+```json
+{
+  "answer": "If a shipment is delayed, contact support for an updated estimate.",
+  "evidence": [
+    {
+      "document_id": "delivery-policy",
+      "document_version": "v2",
+      "section": "Delayed shipments",
+      "release_id": "release_2026_11_01",
+      "visibility": "public",
+      "score": 2.0,
+      "text": "If a shipment is delayed, customers may contact support for an updated estimate."
+    }
+  ],
+  "grounded": true,
+  "needs_handoff": false
+}
+```
+
+Unknown or insufficiently supported questions return `answer: null`, `evidence: []`, `grounded: false`, and `needs_handoff: true`. M2 must include a predeclared offline evaluation set covering a published public hit, a wrong/unpublished version, an internal-only policy, and an unknown-answer case. Do not rewrite labels after observing retrieval results.
+
 ## Later V1 endpoints (add when milestone needs them)
 - Knowledge: document create/list -> index -> test retrieval -> publish active version -> get published release.
 - Support: queue/list, conversation claim/takeover, human reply, resolve, ticket create/list/detail.

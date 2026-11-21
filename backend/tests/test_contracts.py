@@ -1,13 +1,18 @@
-from datetime import date
+from datetime import date, datetime, timezone
 from unittest import TestCase
 
 from pydantic import ValidationError
 
 from backend.app.contracts import (
     ActorSummary,
+    AppendMessageRequest,
+    AppendMessageResponse,
+    ConversationSummary,
+    CreateConversationRequest,
     DemoLoginRequest,
     DemoLoginResponse,
     ErrorResponse,
+    Message,
     OrderSummary,
 )
 
@@ -63,6 +68,36 @@ class ContractModelTests(TestCase):
                 shipment_status="delivered",
                 estimated_delivery_date=None,
             )
+
+    def test_widget_conversation_contract_has_no_client_authorship(self) -> None:
+        conversation = ConversationSummary(
+            conversation_id="conv_1001",
+            channel="widget",
+            state="AI_ACTIVE",
+            order_id="order_1001",
+            messages=[],
+        )
+        message_request = AppendMessageRequest(content="Where is my order?")
+        message = Message(
+            message_id="msg_1001",
+            author_type="customer",
+            content=message_request.content,
+            created_at=datetime(2026, 11, 21, 12, 0, tzinfo=timezone.utc),
+        )
+        response = AppendMessageResponse(
+            conversation_id=conversation.conversation_id,
+            state=conversation.state,
+            message=message,
+            assistant_reply=None,
+            evidence=[],
+            handoff_reason=None,
+        )
+
+        self.assertEqual(response.model_dump(mode="json")["message"]["author_type"], "customer")
+
+    def test_widget_conversation_request_rejects_non_widget_channels(self) -> None:
+        with self.assertRaises(ValidationError):
+            CreateConversationRequest(channel="email", order_id=None)
 
     def test_error_envelope_is_explicit(self) -> None:
         error = ErrorResponse(

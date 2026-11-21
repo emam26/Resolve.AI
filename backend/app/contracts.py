@@ -4,7 +4,7 @@ These models deliberately have no web-framework or database dependency. They
 freeze the JSON contract before the FastAPI and persistence layers are added.
 """
 
-from datetime import date
+from datetime import date, datetime
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -14,6 +14,9 @@ ActorRole = Literal["customer", "support_agent", "refund_approver", "merchant_ad
 OrderStatus = Literal["processing", "in_transit", "delayed", "delivered", "cancelled"]
 PaymentStatus = Literal["pending", "paid", "failed"]
 ShipmentStatus = Literal["not_shipped", "in_transit", "delayed", "delivered"]
+ConversationChannel = Literal["widget"]
+ConversationState = Literal["AI_ACTIVE", "HANDOFF_QUEUED", "HUMAN_ACTIVE", "RESOLVED"]
+MessageAuthorType = Literal["customer", "assistant", "staff"]
 
 
 class ContractModel(BaseModel):
@@ -37,6 +40,39 @@ class ActorSummary(ContractModel):
 class DemoLoginResponse(ContractModel):
     session_id: str
     actor: ActorSummary
+
+
+class Message(ContractModel):
+    message_id: str
+    author_type: MessageAuthorType
+    content: str = Field(min_length=1)
+    created_at: datetime
+
+
+class CreateConversationRequest(ContractModel):
+    channel: ConversationChannel
+    order_id: str | None
+
+
+class ConversationSummary(ContractModel):
+    conversation_id: str
+    channel: ConversationChannel
+    state: ConversationState
+    order_id: str | None
+    messages: list[Message]
+
+
+class AppendMessageRequest(ContractModel):
+    content: str = Field(min_length=1)
+
+
+class AppendMessageResponse(ContractModel):
+    conversation_id: str
+    state: ConversationState
+    message: Message
+    assistant_reply: Message | None
+    evidence: list[dict[str, object]]
+    handoff_reason: str | None
 
 
 class OrderSummary(ContractModel):
