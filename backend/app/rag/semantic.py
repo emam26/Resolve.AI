@@ -147,7 +147,7 @@ class InMemorySemanticRetriever:
             if not _audience_allows(record, audience):
                 continue
             score = cosine_similarity(query_vector, record_vector)
-            if score > self._minimum_score:
+            if score >= self._minimum_score:
                 ranked.append((score, record))
 
         ranked.sort(key=lambda item: (-item[0], *_record_sort_key(item[1])))

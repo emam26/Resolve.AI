@@ -163,6 +163,25 @@ def test_semantic_retrieval_and_grounding_guard_reject_weak_matches() -> None:
     assert not is_sufficient_semantic_match(evidence)
 
 
+def test_semantic_retrieval_accepts_the_sufficiency_threshold_boundary() -> None:
+    record = _record("delivery-policy", text="shipment estimate")
+    provider = FakeEmbeddingProvider(
+        {
+            "Policy section\nshipment estimate": _vector(0.6, 0.8),
+            "threshold query": _vector(1.0, 0.0),
+        }
+    )
+    retriever = InMemorySemanticRetriever(
+        [record], provider, minimum_score=0.6
+    )
+
+    evidence = retriever.retrieve_published_policy("threshold query")
+
+    assert len(evidence) == 1
+    assert evidence[0].score == pytest.approx(0.6)
+    assert is_sufficient_semantic_match(evidence, minimum_score=0.6)
+
+
 def test_pgvector_query_compiles_with_published_audience_filters_and_tie_breaking() -> None:
     statement = build_pgvector_policy_query(
         [1.0] + [0.0] * (DEFAULT_EMBEDDING_DIMENSIONS - 1), top_k=3
