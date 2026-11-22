@@ -53,7 +53,7 @@ DEFAULT_EVALUATION_CASES: tuple[EvaluationCase, ...] = (
     ),
     EvaluationCase(
         label="internal_policy_hidden_from_customer",
-        query="refund review approver authorization",
+        query="approver authorization external action",
         audience="customer",
         expected_document_id=None,
         expected_version=None,
@@ -78,6 +78,93 @@ DEFAULT_EVALUATION_CASES: tuple[EvaluationCase, ...] = (
         expected_version=None,
         expected_section=None,
         expect_supported_answer=False,
+    ),
+)
+
+
+# Frozen M11A additions for operational customer investigations.  The original
+# five-case M2 tuple remains stable because it is reused by the M8 benchmark.
+M11A_EVALUATION_CASES: tuple[EvaluationCase, ...] = (
+    EvaluationCase(
+        label="published_public_shipping_estimate",
+        query="shipping estimate carrier acceptance",
+        audience="customer",
+        expected_document_id="shipping-policy",
+        expected_version="v1",
+        expected_section="Shipping estimates",
+        expect_supported_answer=True,
+    ),
+    EvaluationCase(
+        label="published_public_missing_package",
+        query="tracking delivered missing package",
+        audience="customer",
+        expected_document_id="missing-package-policy",
+        expected_version="v1",
+        expected_section="Missing packages",
+        expect_supported_answer=True,
+    ),
+    EvaluationCase(
+        label="published_public_damaged_item",
+        query="damaged item packaging photos",
+        audience="customer",
+        expected_document_id="product-damage-policy",
+        expected_version="v1",
+        expected_section="Damaged items",
+        expect_supported_answer=True,
+    ),
+    EvaluationCase(
+        label="published_public_wrong_item",
+        query="received wrong item order",
+        audience="customer",
+        expected_document_id="fulfillment-policy",
+        expected_version="v1",
+        expected_section="Wrong items",
+        expect_supported_answer=True,
+    ),
+    EvaluationCase(
+        label="published_public_partial_delivery",
+        query="partial delivery expected item",
+        audience="customer",
+        expected_document_id="fulfillment-policy",
+        expected_version="v1",
+        expected_section="Partial order deliveries",
+        expect_supported_answer=True,
+    ),
+    EvaluationCase(
+        label="published_public_cancellation",
+        query="cancellation order fulfillment",
+        audience="customer",
+        expected_document_id="order-cancellation-policy",
+        expected_version="v1",
+        expected_section="Order cancellations",
+        expect_supported_answer=True,
+    ),
+    EvaluationCase(
+        label="published_public_return_window",
+        query="return 30 days unused",
+        audience="customer",
+        expected_document_id="returns-policy",
+        expected_version="v1",
+        expected_section="Return window",
+        expect_supported_answer=True,
+    ),
+    EvaluationCase(
+        label="published_public_return_credit_processing",
+        query="return credit processing status",
+        audience="customer",
+        expected_document_id="refund-processing-policy",
+        expected_version="v1",
+        expected_section="Return credit processing",
+        expect_supported_answer=True,
+    ),
+    EvaluationCase(
+        label="published_public_human_escalation",
+        query="human support insufficient evidence",
+        audience="customer",
+        expected_document_id="human-support-policy",
+        expected_version="v1",
+        expected_section="Human support escalation",
+        expect_supported_answer=True,
     ),
 )
 
@@ -292,6 +379,7 @@ def evaluate_policy_retrieval(
 __all__ = [
     "DEFAULT_EVALUATION_CASES",
     "EvaluationCase",
+    "M11A_EVALUATION_CASES",
     "RetrievalEvaluationReport",
     "evaluate_policy_retrieval",
 ]

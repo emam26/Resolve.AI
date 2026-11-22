@@ -76,7 +76,13 @@ def test_postgres_irrelevant_query_returns_no_evidence(pg_retriever) -> None:
 
 
 def test_postgres_customer_cannot_retrieve_internal_policy(pg_retriever) -> None:
-    assert pg_retriever.retrieve_published_policy("refund review") == []
+    results = pg_retriever.retrieve_published_policy("refund review")
+
+    # The expanded operational corpus includes public refund-processing
+    # evidence.  It may match the query, but the staff-only review procedure
+    # must remain inaccessible to a customer.
+    assert all(result.document_id != "refund-review-policy" for result in results)
+    assert all(result.visibility == "public" for result in results)
 
 
 def test_postgres_staff_can_retrieve_published_internal_policy(pg_retriever) -> None:

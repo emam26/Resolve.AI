@@ -6,6 +6,7 @@ from backend.app.rag import (
     retrieve_published_policy,
 )
 from backend.app.rag.corpus import POLICY_CORPUS
+from backend.app.rag.evaluation import M11A_EVALUATION_CASES
 
 
 def test_corpus_contains_required_version_and_visibility_cases() -> None:
@@ -14,13 +15,21 @@ def test_corpus_contains_required_version_and_visibility_cases() -> None:
         for record in POLICY_CORPUS
     }
 
+    assert ("shipping-policy", "v1", "published", "public") in identifiers
     assert ("delivery-policy", "v2", "published", "public") in identifiers
     assert ("delivery-policy", "v1", "unpublished", "public") in identifiers
+    assert ("missing-package-policy", "v1", "published", "public") in identifiers
+    assert ("product-damage-policy", "v1", "published", "public") in identifiers
+    assert ("fulfillment-policy", "v1", "published", "public") in identifiers
+    assert ("order-cancellation-policy", "v1", "published", "public") in identifiers
+    assert ("returns-policy", "v1", "published", "public") in identifiers
+    assert ("refund-processing-policy", "v1", "published", "public") in identifiers
+    assert ("human-support-policy", "v1", "published", "public") in identifiers
     assert ("refund-review-policy", "v1", "published", "internal") in identifiers
 
 
 def test_customer_retrieval_returns_published_public_v2_with_contract_fields() -> None:
-    results = retrieve_published_policy("shipment delayed")
+    results = retrieve_published_policy("shipment delayed", top_k=1)
 
     assert len(results) == 1
     assert results[0].model_dump(mode="json") == {
@@ -42,10 +51,16 @@ def test_customer_cannot_receive_unpublished_or_internal_evidence() -> None:
         "shipment delayed contact support", audience="customer", top_k=3
     )
     internal_query = retrieve_published_policy(
-        "refund review approver authorization", audience="customer", top_k=3
+        "approver authorization", audience="customer", top_k=3
     )
 
-    assert all(result.document_version != "v1" for result in old_version_query)
+    assert all(
+        not (
+            result.document_id == "delivery-policy"
+            and result.document_version == "v1"
+        )
+        for result in old_version_query
+    )
     assert all(result.document_id != "refund-review-policy" for result in internal_query)
     assert internal_query == []
 
@@ -89,6 +104,30 @@ def test_predeclared_evaluation_set_is_perfect_on_offline_corpus() -> None:
     assert report.citation_visibility_accuracy == 1.0
     assert report.unsupported_answer_behavior == 1.0
     assert report.as_dict()["Recall@3"] == 1.0
+
+
+def test_m11a_predeclared_operational_cases_are_safe_and_grounded() -> None:
+    labels = [case.label for case in M11A_EVALUATION_CASES]
+    report = evaluate_policy_retrieval(
+        cases=(*DEFAULT_EVALUATION_CASES, *M11A_EVALUATION_CASES)
+    )
+
+    assert labels == [
+        "published_public_shipping_estimate",
+        "published_public_missing_package",
+        "published_public_damaged_item",
+        "published_public_wrong_item",
+        "published_public_partial_delivery",
+        "published_public_cancellation",
+        "published_public_return_window",
+        "published_public_return_credit_processing",
+        "published_public_human_escalation",
+    ]
+    assert report.query_count == 14
+    assert report.recall_at_3 == 1.0
+    assert report.wrong_version_exposure == 0.0
+    assert report.citation_visibility_accuracy == 1.0
+    assert report.unsupported_answer_behavior == 1.0
 
 
 def test_evaluation_uses_injected_retriever_for_semantic_path() -> None:
