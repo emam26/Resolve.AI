@@ -29,6 +29,7 @@ from backend.app.contracts import (
 )
 from backend.app.db import ConversationRepository, RefundRepository, StoredConversation, StoredRefund
 from backend.app.db.conversations import create_database_engine
+from backend.app.commerce import CommerceRepository
 
 
 class _DemoInvestigationModel:
@@ -64,10 +65,10 @@ class _AuthorizedOrderFactsTool:
         self._customer_id = customer_id
 
     def get_order_facts(self, order_id: str) -> OrderFacts | None:
-        record = self._service._orders.get(order_id)
-        if record is None or record.owner_customer_id != self._customer_id:
+        order = self._service._order_for_customer(order_id, self._customer_id)
+        if order is None:
             return None
-        summary = record.summary
+        summary = order.summary
         return OrderFacts(
             order_id=summary.order_id,
             status=summary.status,
@@ -112,6 +113,13 @@ class IdempotencyConflict(RuntimeError):
 class _OrderRecord:
     owner_customer_id: str
     summary: OrderSummary
+    max_refundable_cents: int = REFUNDABLE_LIMIT_CENTS
+
+
+@dataclass(frozen=True)
+class _AuthorizedOrder:
+    summary: OrderSummary
+    max_refundable_cents: int
 
 
 class InMemoryResolveService:
@@ -124,11 +132,13 @@ class InMemoryResolveService:
         policy_retriever: PolicyRetriever | None = None,
         response_provider: PolicyAnswerProvider | None = None,
         investigation_model: InvestigationModel | None = None,
+        commerce_repository: CommerceRepository | None = None,
     ) -> None:
         self._sessions: dict[str, str] = {}
         self._policy_retriever = policy_retriever
         self._response_provider = response_provider
         self._investigation_model = investigation_model or _DemoInvestigationModel()
+        self._commerce_repository = commerce_repository
         configured_database_url = database_url or "sqlite+pysqlite:///:memory:"
         database_engine = create_database_engine(configured_database_url)
         self._repository = ConversationRepository(
@@ -227,10 +237,30 @@ class InMemoryResolveService:
         return self.actor_summary(actor_id)
 
     def order_for_actor(self, order_id: str, actor: ActorSummary) -> OrderSummary | None:
-        record = self._orders.get(order_id)
-        if record is None or record.owner_customer_id != actor.customer_id:
+        if actor.role != "customer":
             return None
-        return record.summary
+        order = self._order_for_customer(order_id, actor.customer_id)
+        return None if order is None else order.summary
+
+    def _order_for_customer(
+        self, order_id: str, customer_id: str | None
+    ) -> _AuthorizedOrder | None:
+        """Prefer the configured import, then preserve the V1 local fixtures."""
+
+        if self._commerce_repository is not None:
+            imported = self._commerce_repository.order_for_customer(order_id, customer_id)
+            if imported is not None:
+                return _AuthorizedOrder(
+                    summary=imported.summary,
+                    max_refundable_cents=imported.max_refundable_cents,
+                )
+        record = self._orders.get(order_id)
+        if record is None or record.owner_customer_id != customer_id:
+            return None
+        return _AuthorizedOrder(
+            summary=record.summary,
+            max_refundable_cents=record.max_refundable_cents,
+        )
 
     def create_conversation(
         self, request: CreateConversationRequest, actor: ActorSummary
@@ -453,16 +483,17 @@ class InMemoryResolveService:
             raise ForbiddenOperation("conversation is assigned to another support agent")
         if record.order_id is None:
             raise RefundValidationError("refund requests require a linked order")
-        order = self._orders.get(record.order_id)
-        if order is None or order.owner_customer_id != record.owner_customer_id:
+        order = self._order_for_customer(record.order_id, record.owner_customer_id)
+        if order is None:
             return None
         reason = request.reason.strip()
         idempotency_key = request.idempotency_key.strip()
         if not reason or not idempotency_key:
             raise RefundValidationError("reason and idempotency_key are required")
-        if request.amount_cents > REFUNDABLE_LIMIT_CENTS:
+        refundable_limit = min(REFUNDABLE_LIMIT_CENTS, order.max_refundable_cents)
+        if request.amount_cents > refundable_limit:
             raise RefundValidationError(
-                f"refund amount cannot exceed {REFUNDABLE_LIMIT_CENTS} cents"
+                f"refund amount cannot exceed {refundable_limit} cents"
             )
         existing = self._refund_repository.get_by_idempotency(
             conversation_id, idempotency_key

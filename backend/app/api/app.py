@@ -42,6 +42,7 @@ from backend.app.services.in_memory import (
 )
 from backend.app.rag.pgvector_store import PgVectorPolicyRetriever
 from backend.app.rag.semantic import SentenceTransformerEmbeddingProvider
+from backend.app.commerce import CommerceRepository
 
 
 UNAUTHENTICATED = {
@@ -82,6 +83,15 @@ def _configured_policy_retriever(database_url: str) -> PolicyRetriever | None:
     return PgVectorPolicyRetriever(database_url, provider)
 
 
+def _configured_commerce_repository() -> CommerceRepository | None:
+    """Enable imported orders only through an explicit local database URL."""
+
+    commerce_database_url = os.getenv("RESOLVEAI_COMMERCE_DATABASE_URL")
+    if not commerce_database_url:
+        return None
+    return CommerceRepository(commerce_database_url)
+
+
 class _RefundDecisionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -94,6 +104,7 @@ def create_app(
     policy_retriever: PolicyRetriever | None = None,
     response_provider: PolicyAnswerProvider | None = None,
     investigation_model: InvestigationModel | None = None,
+    commerce_repository: CommerceRepository | None = None,
 ) -> FastAPI:
     """Create an API application with configurable local conversation storage."""
 
@@ -133,14 +144,21 @@ def create_app(
         if policy_retriever is not None
         else _configured_policy_retriever(configured_database_url)
     )
+    configured_commerce_repository = (
+        commerce_repository
+        if commerce_repository is not None
+        else _configured_commerce_repository()
+    )
     service = InMemoryResolveService(
         configured_database_url,
         policy_retriever=configured_policy_retriever,
         response_provider=response_provider,
         investigation_model=investigation_model,
+        commerce_repository=configured_commerce_repository,
     )
     app.state.service = service
     app.state.policy_retriever = configured_policy_retriever
+    app.state.commerce_repository = configured_commerce_repository
     router = APIRouter(prefix="/api/v1")
 
     @app.exception_handler(RequestValidationError)
