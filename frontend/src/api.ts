@@ -54,6 +54,18 @@ export interface SupportInboxResponse {
   conversations: SupportConversationSummary[];
 }
 
+export type RetrievalMode = "not_applicable" | "lexical" | "semantic" | "lexical_fallback";
+
+export interface PolicyEvidence {
+  document_id: string;
+  document_version: string;
+  section: string;
+  release_id: string;
+  visibility: "public" | "internal";
+  score: number;
+  text: string;
+}
+
 export type RefundState =
   | "PENDING_REVIEW"
   | "APPROVED_EXTERNAL_ACTION_REQUIRED"
@@ -80,9 +92,9 @@ export interface AppendMessageResponse {
   state: ConversationState;
   message: ConversationMessage;
   assistant_reply: ConversationMessage | null;
-  evidence: Record<string, unknown>[];
+  evidence: PolicyEvidence[];
   handoff_reason: string | null;
-  retrieval_mode: "not_applicable" | "lexical" | "semantic" | "lexical_fallback";
+  retrieval_mode: RetrievalMode;
 }
 
 interface ErrorEnvelope {

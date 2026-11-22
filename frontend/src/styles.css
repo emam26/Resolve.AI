@@ -175,6 +175,24 @@ input:focus, textarea:focus { border-color: #4cb8aa; box-shadow: 0 0 0 3px #dff4
 
 .message p { margin: 0; font-size: 13px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
 
+.resolution-panel { margin: 0 18px 14px; padding: 12px; border: 1px solid #dcece8; border-radius: 10px; color: #4c7278; background: #f8fcfb; font-size: 11px; line-height: 1.45; }
+
+.resolution-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+
+.resolution-heading strong { display: block; margin-top: 3px; color: #22635f; font-size: 11px; }
+
+.resolution-copy { margin: 9px 0 0; }
+
+.citation-list { display: flex; flex-direction: column; gap: 6px; margin-top: 9px; }
+
+.resolution-label { color: #78939b; font-size: 9px; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; }
+
+.citation { display: flex; flex-direction: column; gap: 1px; padding: 7px 8px; border-left: 3px solid #7bc4b8; border-radius: 5px; background: #edf8f5; }
+
+.citation strong { color: #22635f; font-size: 10px; }
+
+.citation span { font-size: 10px; }
+
 .m1-state { display: flex; gap: 10px; margin: 0 18px 14px; padding: 12px; border: 1px solid #dcece8; border-radius: 10px; color: #4c7278; background: #f4faf8; font-size: 11px; line-height: 1.45; }
 
 .state-icon { display: grid; place-items: center; width: 22px; height: 22px; flex: 0 0 auto; border-radius: 50%; color: #117970; background: #dcf2ec; font-size: 16px; }

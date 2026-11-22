@@ -1,6 +1,7 @@
 import { FormEvent, useState } from "react";
 import {
   ApiError,
+  AppendMessageResponse,
   appendSupportMessage,
   appendCustomerMessage,
   approveRefund,
@@ -52,6 +53,7 @@ function formatCents(value: number): string {
 export default function App() {
   const [session, setSession] = useState<DemoLoginResponse | null>(null);
   const [conversation, setConversation] = useState<ConversationResponse | null>(null);
+  const [latestResolution, setLatestResolution] = useState<AppendMessageResponse | null>(null);
   const [orderId, setOrderId] = useState("order_1001");
   const [draft, setDraft] = useState("");
   const [notice, setNotice] = useState<Notice | null>(null);
@@ -80,6 +82,7 @@ export default function App() {
   async function startDemoSession() {
     setNotice(null);
     setConversation(null);
+    setLatestResolution(null);
     setIsStarting(true);
     try {
       setSession(await loginDemoCustomer());
@@ -99,6 +102,7 @@ export default function App() {
     setIsCreating(true);
     try {
       setConversation(await createWidgetConversation(session.session_id, orderId.trim() || null));
+      setLatestResolution(null);
     } catch (error) {
       setNotice(noticeFromError(error));
     } finally {
@@ -126,9 +130,18 @@ export default function App() {
       );
       setConversation((current) =>
         current
-          ? { ...current, state: response.state, messages: [...current.messages, response.message] }
+          ? {
+              ...current,
+              state: response.state,
+              messages: [
+                ...current.messages,
+                response.message,
+                ...(response.assistant_reply ? [response.assistant_reply] : []),
+              ],
+            }
           : current,
       );
+      setLatestResolution(response);
       setDraft("");
     } catch (error) {
       setNotice(noticeFromError(error));
@@ -312,6 +325,7 @@ export default function App() {
       setRefunds((current) => current.map((refund) =>
         refund.refund_id === updated.refund_id ? updated : refund,
       ));
+      setRefundFilter("all");
     } catch (error) {
       setRefundNotice(noticeFromError(error));
     } finally {
@@ -437,6 +451,35 @@ export default function App() {
                     ))
                   )}
                 </div>
+
+                {latestResolution && (
+                  <div className="resolution-panel" role="status">
+                    <div className="resolution-heading">
+                      <div>
+                        <span className="section-label">Investigation result</span>
+                        <strong>{latestResolution.handoff_reason ? "Human review recommended" : "Grounded answer"}</strong>
+                      </div>
+                      <span className="state-badge">{latestResolution.retrieval_mode}</span>
+                    </div>
+                    {latestResolution.evidence.length > 0 ? (
+                      <div className="citation-list">
+                        <span className="resolution-label">Policy citations</span>
+                        {latestResolution.evidence.map((evidence) => (
+                          <div className="citation" key={`${evidence.document_id}-${evidence.document_version}-${evidence.section}`}>
+                            <strong>{evidence.document_id} · {evidence.document_version}</strong>
+                            <span>{evidence.section} · {evidence.release_id}</span>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="resolution-copy">
+                        {latestResolution.handoff_reason
+                          ? "No sufficient published customer policy evidence was found. Request human support for help."
+                          : "No policy evidence was needed for this response."}
+                      </p>
+                    )}
+                  </div>
+                )}
 
                 <div className="m1-state" role="status">
                   <span className="state-icon" aria-hidden="true">⌁</span>
