@@ -23,9 +23,9 @@ ResolveAI addresses that workflow with:
 | Customer widget | React/TypeScript/Vite UI with demo customer login, order selection, transcript, and human-handoff control | Local API and frontend checks pass |
 | Staff console | Support inbox, claim/reply/resolve controls, and refund-approver view | Local API and frontend checks pass |
 | Identity and authorization | Server-issued synthetic sessions, role checks, and customer order ownership checks | Covered by backend tests |
-| Conversations | SQLAlchemy-backed conversation and message persistence; SQLite is the default local database | SQLite verified; PostgreSQL runtime not verified |
+| Conversations | SQLAlchemy-backed conversation and message persistence; SQLite is the default local database | SQLite and disposable PostgreSQL runtime exercised locally; no production database |
 | Policy answering | Deterministic lexical retrieval over a small versioned policy corpus with published/visibility filtering and citations | Offline baseline verified |
-| Semantic retrieval | Sentence-transformers adapter, deterministic cosine retriever, pgvector retriever, publication-safe query, migration, and seed helper | Integrated behind an explicit PostgreSQL/semantic configuration; model loading and PostgreSQL execution outstanding |
+| Semantic retrieval | Sentence-transformers adapter, deterministic cosine retriever, pgvector retriever, publication-safe query, migration, and seed helper | Real 384-dimensional local embeddings seeded into pgvector; customer API and browser path verified locally |
 | Investigation workflow | Bounded LangGraph workflow with typed order-facts and injected policy retrieval | Deterministic local workflow and customer API path verified; no live model SDK |
 | Refund review | Backend API supports support-created pending requests, idempotency, separate approver decisions, and an external-action-required terminal state; the current console exposes approver review | Local synthetic flow verified; no payment operation |
 
@@ -41,7 +41,7 @@ The main supported path is:
 6. A separate `refund_approver_001` actor can approve or reject the request. Approval produces `APPROVED_EXTERNAL_ACTION_REQUIRED`; it never moves money and never records `REFUNDED`.
 7. After the human work is complete, the support agent can resolve the conversation, moving it from `HUMAN_ACTIVE` to `RESOLVED`.
 
-The local widget route uses a deterministic classifier and mocked model boundary; it does not call a live LLM. Semantic retrieval is opt-in for a PostgreSQL database through `RESOLVEAI_POLICY_RETRIEVAL=semantic`. If that backend or its local model is unavailable, the policy answer layer falls back to the lexical baseline and never presents that fallback as a semantic success.
+The local widget route uses a deterministic classifier and mocked model boundary; it does not call a live LLM. Semantic retrieval is opt-in for a PostgreSQL database through `RESOLVEAI_POLICY_RETRIEVAL=semantic`. The sentence-transformers model is loaded from the local cache only. If that backend or local model is unavailable, the policy answer layer falls back to the lexical baseline and never presents that fallback as a semantic success.
 
 ## System architecture
 
@@ -181,19 +181,22 @@ npm run typecheck
 npm run build
 ```
 
-The same backend and frontend checks are defined in [`.github/workflows/ci.yml`](.github/workflows/ci.yml). The current local verification passed 55 backend tests; five opt-in PostgreSQL tests were skipped because no test database URL was configured. Frontend typecheck and the production build remain independently verified.
+The same backend and frontend checks are defined in [`.github/workflows/ci.yml`](.github/workflows/ci.yml). The current local verification passed 68 backend tests, including eight PostgreSQL integration tests, with no skips while the disposable database was running. Frontend typecheck and the production build also pass. A separate five-case real semantic evaluation matched the lexical baseline: Recall@3 1.0, wrong-version exposure 0.0, citation/visibility accuracy 1.0, and unsupported behavior 1.0 for both.
 
 ### PostgreSQL policy index (optional)
 
-The repository includes an Alembic migration for the `policy_embeddings` table and a deterministic-embedder seed helper. From `backend/`, point `RESOLVEAI_DATABASE_URL` at a PostgreSQL instance with the `vector` extension available and run:
+The repository includes an Alembic migration for the `policy_embeddings` table and a local-files-only sentence-transformers seed command. Cache the configured model once from the official model source, then point `RESOLVEAI_DATABASE_URL` at a PostgreSQL instance with the `vector` extension available. Run the migration and seed from `backend/`, then run the read-only evaluator from the repository root:
 
 ```powershell
 $env:RESOLVEAI_DATABASE_URL = "postgresql+psycopg://user:password@localhost:5432/resolveai"
+Push-Location backend
 ..\.venv\Scripts\python.exe -m alembic -c alembic.ini upgrade head
 ..\.venv\Scripts\python.exe -m app.rag.seed
+Pop-Location
+.\.venv\Scripts\python.exe -m backend.app.rag.semantic_eval
 ```
 
-The migration and idempotent seed command are implemented, but PostgreSQL execution, extension permissions, and sentence-transformers model loading are not claimed as verified by the default local test run.
+The migration, idempotent real-embedding seed command, and frozen five-case semantic evaluation were verified locally against PostgreSQL 16/pgvector. The evaluation command is read-only and requires the configured model to already be cached; it does not download models. The default CI tests use deterministic embeddings. Production database provisioning, extension permissions, and live service operations remain outside this repository’s verification scope.
 
 ## Synthetic data and safety boundaries
 
@@ -210,17 +213,16 @@ No Shopify or other commerce integration, real customer data, payment provider, 
 
 ## Roadmap
 
-- Verify semantic retrieval, policy seeding, and publication/version filtering against a PostgreSQL/pgvector runtime.
 - Add the planned PostgreSQL full-text comparison and measure it against the lexical and semantic baselines.
 - Connect the controlled investigation workflow to an owner-approved model SDK behind explicit cost and credential controls.
-- Verify Docker/PostgreSQL and browser-level flows in a reproducible environment.
+- Add a reproducible browser-test runner when the project’s supported automation environment is standardized.
 - Consider production identity, merchant integrations, multi-tenant isolation, and billing only after the single-merchant slice is hardened.
 
 ## Limitations
 
 - The customer API uses a deterministic local classifier and mocked model boundary; it is not a live provider integration.
-- The semantic and pgvector paths are integrated and tested with deterministic local components, but local model loading and PostgreSQL execution have not been verified here.
-- SQLite is the verified local persistence path. PostgreSQL execution, Docker execution, and browser/manual testing remain outstanding.
+- The semantic and pgvector paths are verified locally with real sentence-transformers embeddings and deterministic CI coverage; the five-case evaluation showed parity with the lexical baseline rather than a measured quality gain.
+- SQLite remains the default local persistence path. PostgreSQL, Docker/WSL, and browser automation were verified only against disposable synthetic data, not production infrastructure.
 - Demo authentication, seeded identities, and the single fictional merchant are not suitable for production use.
 
 ## Documentation
