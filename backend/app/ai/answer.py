@@ -4,6 +4,7 @@ from typing import Protocol, Sequence
 
 from pydantic import BaseModel, ConfigDict, PrivateAttr
 
+from backend.app.diagnostics import log_event
 from backend.app.rag.corpus import POLICY_CORPUS
 from backend.app.rag.models import PolicyAudience, PolicyEvidence, PolicyRecord
 from backend.app.rag.retrieval import (
@@ -111,9 +112,15 @@ def answer_from_published_policy(
             ]
             sufficient = is_sufficient_semantic_match(evidence)
             retrieval_mode = "semantic"
-        except Exception:
+        except Exception as error:
             # A failed semantic backend must degrade to the deterministic
             # lexical baseline, never to an unsupported confident answer.
+            log_event(
+                "policy_retrieval_fallback",
+                retrieval_mode="lexical_fallback",
+                error_category="semantic_backend_unavailable",
+                error_type=type(error).__name__,
+            )
             evidence = retrieve_published_policy(
                 query, audience=audience, top_k=top_k, corpus=corpus
             )

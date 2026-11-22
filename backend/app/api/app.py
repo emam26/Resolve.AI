@@ -1,11 +1,12 @@
 """Testable FastAPI routes for the deterministic M1 API slice."""
 
 import os
+from typing import Awaitable, Callable
 
 from fastapi import Body, FastAPI, Header, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from fastapi.routing import APIRouter
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -26,6 +27,11 @@ from backend.app.contracts import (
 )
 from backend.app.ai.answer import PolicyRetriever
 from backend.app.ai.investigation import InvestigationModel
+from backend.app.diagnostics import (
+    new_correlation_id,
+    reset_correlation_id,
+    set_correlation_id,
+)
 from backend.app.services.in_memory import (
     ConversationStateConflict,
     ForbiddenOperation,
@@ -100,8 +106,23 @@ def create_app(
         allow_origins=allowed_origins,
         allow_credentials=False,
         allow_methods=["GET", "POST", "OPTIONS"],
-        allow_headers=["Accept", "Authorization", "Content-Type"],
+        allow_headers=["Accept", "Authorization", "Content-Type", "X-Request-ID"],
+        expose_headers=["X-Request-ID"],
     )
+
+    @app.middleware("http")
+    async def correlation_middleware(
+        request: Request, call_next: Callable[[Request], Awaitable[Response]]
+    ) -> Response:
+        correlation_id = new_correlation_id(request.headers.get("X-Request-ID"))
+        token = set_correlation_id(correlation_id)
+        try:
+            response = await call_next(request)
+        finally:
+            reset_correlation_id(token)
+        response.headers["X-Request-ID"] = correlation_id
+        return response
+
     configured_database_url = database_url or os.getenv(
         "RESOLVEAI_DATABASE_URL", "sqlite+pysqlite:///:memory:"
     )

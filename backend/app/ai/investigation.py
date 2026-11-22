@@ -7,12 +7,14 @@ database, or arbitrary tool execution.
 
 from __future__ import annotations
 
+from time import perf_counter
 from typing import Literal, Mapping, Protocol, TypedDict
 
 from langgraph.graph import END, START, StateGraph
 from pydantic import BaseModel, ConfigDict
 
 from backend.app.contracts import ConversationState, OrderStatus, ShipmentStatus
+from backend.app.diagnostics import log_event
 from backend.app.rag.models import PolicyAudience, PolicyEvidence
 from backend.app.ai.answer import PolicyRetriever, answer_from_published_policy
 
@@ -272,21 +274,39 @@ def run_investigation(
 ) -> InvestigationResult:
     """Run the finite investigation graph and fail closed on tool/model errors."""
 
+    started = perf_counter()
+
+    def record(result: InvestigationResult) -> InvestigationResult:
+        log_event(
+            "investigation_completed",
+            outcome=result.outcome,
+            retrieval_mode=result.retrieval_mode,
+            evidence_count=len(result.evidence),
+            handed_off=result.outcome == "HANDOFF",
+            handoff_reason=result.handoff_reason,
+            elapsed_ms=round((perf_counter() - started) * 1000, 3),
+        )
+        return result
+
     if conversation_state != "AI_ACTIVE":
-        return InvestigationResult(
-            outcome="HANDOFF",
-            answer=None,
-            evidence=[],
-            handoff_reason="conversation_not_ai_active",
-            trace=["blocked_conversation_state"],
+        return record(
+            InvestigationResult(
+                outcome="HANDOFF",
+                answer=None,
+                evidence=[],
+                handoff_reason="conversation_not_ai_active",
+                trace=["blocked_conversation_state"],
+            )
         )
     if not query.strip():
-        return InvestigationResult(
-            outcome="HANDOFF",
-            answer=None,
-            evidence=[],
-            handoff_reason="empty_query",
-            trace=["input_validation"],
+        return record(
+            InvestigationResult(
+                outcome="HANDOFF",
+                answer=None,
+                evidence=[],
+                handoff_reason="empty_query",
+                trace=["input_validation"],
+            )
         )
 
     initial: _InvestigationState = {
@@ -301,24 +321,34 @@ def run_investigation(
     }
     try:
         state = _build_graph().invoke(initial)
-    except Exception:
-        return InvestigationResult(
-            outcome="HANDOFF",
-            answer=None,
-            evidence=[],
-            handoff_reason="workflow_error",
-            trace=["workflow_error"],
+    except Exception as error:
+        log_event(
+            "investigation_failed",
+            error_category="workflow_exception",
+            error_type=type(error).__name__,
+            elapsed_ms=round((perf_counter() - started) * 1000, 3),
+        )
+        return record(
+            InvestigationResult(
+                outcome="HANDOFF",
+                answer=None,
+                evidence=[],
+                handoff_reason="workflow_error",
+                trace=["workflow_error"],
+            )
         )
     result = state.get("result")
     if not isinstance(result, InvestigationResult):
-        return InvestigationResult(
-            outcome="HANDOFF",
-            answer=None,
-            evidence=[],
-            handoff_reason="missing_workflow_result",
-            trace=[*state.get("trace", []), "missing_workflow_result"],
+        return record(
+            InvestigationResult(
+                outcome="HANDOFF",
+                answer=None,
+                evidence=[],
+                handoff_reason="missing_workflow_result",
+                trace=[*state.get("trace", []), "missing_workflow_result"],
+            )
         )
-    return result
+    return record(result)
 
 
 __all__ = [
