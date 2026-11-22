@@ -26,6 +26,7 @@ from backend.app.contracts import (
     SupportInboxResponse,
 )
 from backend.app.ai.answer import PolicyRetriever
+from backend.app.ai.generation import PolicyAnswerProvider
 from backend.app.ai.investigation import InvestigationModel
 from backend.app.diagnostics import (
     new_correlation_id,
@@ -91,6 +92,7 @@ def create_app(
     database_url: str | None = None,
     *,
     policy_retriever: PolicyRetriever | None = None,
+    response_provider: PolicyAnswerProvider | None = None,
     investigation_model: InvestigationModel | None = None,
 ) -> FastAPI:
     """Create an API application with configurable local conversation storage."""
@@ -134,6 +136,7 @@ def create_app(
     service = InMemoryResolveService(
         configured_database_url,
         policy_retriever=configured_policy_retriever,
+        response_provider=response_provider,
         investigation_model=investigation_model,
     )
     app.state.service = service

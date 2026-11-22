@@ -5,6 +5,13 @@ from typing import Protocol, Sequence
 from pydantic import BaseModel, ConfigDict, PrivateAttr
 
 from backend.app.diagnostics import log_event
+from backend.app.ai.generation import (
+    InvalidGeneratedAnswer,
+    PolicyAnswerPrompt,
+    PolicyAnswerProvider,
+    authorized_evidence,
+    validate_generated_answer,
+)
 from backend.app.rag.corpus import POLICY_CORPUS
 from backend.app.rag.models import PolicyAudience, PolicyEvidence, PolicyRecord
 from backend.app.rag.retrieval import (
@@ -24,12 +31,26 @@ class GroundedAnswer(BaseModel):
     grounded: bool
     needs_handoff: bool
     _retrieval_mode: str = PrivateAttr(default="lexical")
+    _generation_mode: str = PrivateAttr(default="deterministic")
+    _citation_ids: list[str] = PrivateAttr(default_factory=list)
 
     @property
     def retrieval_mode(self) -> str:
         """Internal execution mode; excluded from the frozen M2 JSON shape."""
 
         return self._retrieval_mode
+
+    @property
+    def generation_mode(self) -> str:
+        """Internal response formulation mode, excluded from M2 JSON."""
+
+        return self._generation_mode
+
+    @property
+    def citation_ids(self) -> list[str]:
+        """Server-mapped IDs for the evidence supporting the answer."""
+
+        return list(self._citation_ids)
 
 
 class PolicyRetriever(Protocol):
@@ -92,6 +113,7 @@ def answer_from_published_policy(
     corpus: Sequence[PolicyRecord] = POLICY_CORPUS,
     top_k: int = 3,
     policy_retriever: PolicyRetriever | None = None,
+    response_provider: PolicyAnswerProvider | None = None,
 ) -> GroundedAnswer:
     """Retrieve policy evidence and answer only when evidence is sufficient."""
 
@@ -137,14 +159,63 @@ def answer_from_published_policy(
         response._retrieval_mode = retrieval_mode
         return response
 
+    answer = _answer_text(evidence[0], corpus)
+    generation_mode = "deterministic"
+    citation_ids = ["evidence-1"]
+    if response_provider is not None:
+        authorized = authorized_evidence(
+            evidence,
+            answer_texts=[_answer_text(item, corpus) for item in evidence],
+        )
+        try:
+            generated = response_provider.generate(
+                PolicyAnswerPrompt(query=query, evidence=authorized)
+            )
+            validated = validate_generated_answer(generated, authorized)
+            answer = validated.answer
+            generation_mode = "model"
+            citation_ids = validated.citation_ids
+        except Exception as error:
+            log_event(
+                "policy_generation_fallback",
+                error_category=(
+                    "invalid_model_output"
+                    if isinstance(error, InvalidGeneratedAnswer)
+                    else "model_provider_unavailable"
+                ),
+                error_type=type(error).__name__,
+            )
+            try:
+                validate_generated_answer(
+                    {"answer": answer, "citation_ids": ["evidence-1"]},
+                    authorized,
+                )
+            except InvalidGeneratedAnswer:
+                response = GroundedAnswer(
+                    answer=None,
+                    evidence=[],
+                    grounded=False,
+                    needs_handoff=True,
+                )
+                response._retrieval_mode = retrieval_mode
+                return response
+
     response = GroundedAnswer(
-        answer=_answer_text(evidence[0], corpus),
+        answer=answer,
         evidence=evidence,
         grounded=True,
         needs_handoff=False,
     )
     response._retrieval_mode = retrieval_mode
+    response._generation_mode = generation_mode
+    response._citation_ids = citation_ids
     return response
 
 
-__all__ = ["GroundedAnswer", "PolicyRetriever", "answer_from_published_policy"]
+__all__ = [
+    "GroundedAnswer",
+    "PolicyAnswerPrompt",
+    "PolicyAnswerProvider",
+    "PolicyRetriever",
+    "answer_from_published_policy",
+]

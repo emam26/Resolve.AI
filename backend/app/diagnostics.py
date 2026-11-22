@@ -16,6 +16,7 @@ _EVENT_FIELDS: Final = {
         {
             "outcome",
             "retrieval_mode",
+            "generation_mode",
             "evidence_count",
             "handed_off",
             "handoff_reason",
@@ -28,10 +29,12 @@ _EVENT_FIELDS: Final = {
     "policy_retrieval_fallback": frozenset(
         {"retrieval_mode", "error_category", "error_type"}
     ),
+    "policy_generation_fallback": frozenset({"error_category", "error_type"}),
 }
 _RETRIEVAL_MODES: Final = frozenset(
     {"not_applicable", "lexical", "semantic", "lexical_fallback"}
 )
+_GENERATION_MODES: Final = frozenset({"deterministic", "model"})
 _HANDOFF_REASONS: Final = frozenset(
     {
         "conversation_not_ai_active",
@@ -46,7 +49,12 @@ _HANDOFF_REASONS: Final = frozenset(
     }
 )
 _ERROR_CATEGORIES: Final = frozenset(
-    {"semantic_backend_unavailable", "workflow_exception"}
+    {
+        "invalid_model_output",
+        "model_provider_unavailable",
+        "semantic_backend_unavailable",
+        "workflow_exception",
+    }
 )
 _ERROR_TYPE_PATTERN: Final = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,79}$")
 _CORRELATION_ID: ContextVar[str | None] = ContextVar(
@@ -98,6 +106,8 @@ def log_event(event: str, **fields: object) -> None:
             raise TypeError(f"diagnostic field {name} must be JSON scalar")
         if name == "retrieval_mode" and value not in _RETRIEVAL_MODES:
             raise ValueError(f"unsupported retrieval mode: {value}")
+        if name == "generation_mode" and value not in _GENERATION_MODES:
+            raise ValueError(f"unsupported generation mode: {value}")
         if name == "outcome" and value not in {"ANSWER", "HANDOFF"}:
             raise ValueError(f"unsupported investigation outcome: {value}")
         if (

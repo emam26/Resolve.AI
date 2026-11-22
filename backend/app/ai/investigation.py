@@ -13,7 +13,13 @@ from typing import Literal, Mapping, Protocol, TypedDict
 from langgraph.graph import END, START, StateGraph
 from pydantic import BaseModel, ConfigDict
 
-from backend.app.contracts import ConversationState, OrderStatus, ShipmentStatus
+from backend.app.contracts import (
+    ConversationState,
+    GenerationMode,
+    OrderStatus,
+    ShipmentStatus,
+)
+from backend.app.ai.generation import PolicyAnswerProvider
 from backend.app.diagnostics import log_event
 from backend.app.rag.models import PolicyAudience, PolicyEvidence
 from backend.app.ai.answer import PolicyRetriever, answer_from_published_policy
@@ -64,6 +70,8 @@ class InvestigationResult(BaseModel):
     handoff_reason: str | None
     trace: list[str]
     retrieval_mode: RetrievalMode = "not_applicable"
+    generation_mode: GenerationMode = "deterministic"
+    citation_ids: list[str] = []
 
 
 class InvestigationModel(Protocol):
@@ -104,6 +112,7 @@ class _InvestigationState(TypedDict, total=False):
     model: InvestigationModel
     facts_tool: OrderFactsTool
     policy_retriever: PolicyRetriever | None
+    response_provider: PolicyAnswerProvider | None
     intent: InvestigationIntent
     facts: OrderFacts | None
     result: InvestigationResult
@@ -188,10 +197,16 @@ def _answer_policy(state: _InvestigationState) -> dict[str, object]:
         state["query"],
         audience=state["audience"],
         policy_retriever=state.get("policy_retriever"),
+        response_provider=state.get("response_provider"),
     )
     if not grounded.grounded or grounded.answer is None:
         result = _handoff_result(state, "insufficient_published_policy", "answer_policy")
-        result = result.model_copy(update={"retrieval_mode": grounded.retrieval_mode})
+        result = result.model_copy(
+            update={
+                "retrieval_mode": grounded.retrieval_mode,
+                "citation_ids": grounded.citation_ids,
+            }
+        )
     else:
         result = InvestigationResult(
             outcome="ANSWER",
@@ -200,6 +215,10 @@ def _answer_policy(state: _InvestigationState) -> dict[str, object]:
             handoff_reason=None,
             trace=_trace(state, "answer_policy"),
             retrieval_mode=grounded.retrieval_mode,  # type: ignore[arg-type]
+            generation_mode=(
+                "model" if grounded.generation_mode == "model" else "deterministic"
+            ),
+            citation_ids=grounded.citation_ids,
         )
     return {"result": result, "trace": _trace(state, "answer_policy")}
 
@@ -271,6 +290,7 @@ def run_investigation(
     conversation_state: ConversationState,
     order_id: str | None = None,
     policy_retriever: PolicyRetriever | None = None,
+    response_provider: PolicyAnswerProvider | None = None,
 ) -> InvestigationResult:
     """Run the finite investigation graph and fail closed on tool/model errors."""
 
@@ -281,6 +301,7 @@ def run_investigation(
             "investigation_completed",
             outcome=result.outcome,
             retrieval_mode=result.retrieval_mode,
+            generation_mode=result.generation_mode,
             evidence_count=len(result.evidence),
             handed_off=result.outcome == "HANDOFF",
             handoff_reason=result.handoff_reason,
@@ -317,6 +338,7 @@ def run_investigation(
         "model": model,
         "facts_tool": facts_tool,
         "policy_retriever": policy_retriever,
+        "response_provider": response_provider,
         "trace": [],
     }
     try:

@@ -12,6 +12,7 @@ from backend.app.ai.investigation import (
     OrderFacts,
     run_investigation,
 )
+from backend.app.ai.generation import PolicyAnswerProvider
 from backend.app.contracts import (
     ActorSummary,
     AppendMessageResponse,
@@ -120,10 +121,12 @@ class InMemoryResolveService:
         database_url: str | None = None,
         *,
         policy_retriever: PolicyRetriever | None = None,
+        response_provider: PolicyAnswerProvider | None = None,
         investigation_model: InvestigationModel | None = None,
     ) -> None:
         self._sessions: dict[str, str] = {}
         self._policy_retriever = policy_retriever
+        self._response_provider = response_provider
         self._investigation_model = investigation_model or _DemoInvestigationModel()
         configured_database_url = database_url or "sqlite+pysqlite:///:memory:"
         self._repository = ConversationRepository(configured_database_url)
@@ -280,6 +283,7 @@ class InMemoryResolveService:
             conversation_state=updated.state,  # type: ignore[arg-type]
             order_id=updated.order_id,
             policy_retriever=self._policy_retriever,
+            response_provider=self._response_provider,
         )
         assistant_reply = None
         if investigation.outcome == "ANSWER" and investigation.answer is not None:
@@ -308,6 +312,8 @@ class InMemoryResolveService:
                         else "assistant_reply_unavailable"
                     ),
                     retrieval_mode=investigation.retrieval_mode,
+                    generation_mode=investigation.generation_mode,
+                    citation_ids=investigation.citation_ids,
                 )
             assistant_reply = self._message(with_assistant.messages[-1])
         return AppendMessageResponse(
@@ -320,6 +326,8 @@ class InMemoryResolveService:
             ],
             handoff_reason=investigation.handoff_reason,
             retrieval_mode=investigation.retrieval_mode,
+            generation_mode=investigation.generation_mode,
+            citation_ids=investigation.citation_ids,
         )
 
     def handoff(

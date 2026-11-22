@@ -28,6 +28,7 @@ RetrievalMode = Literal[
     "semantic",
     "lexical_fallback",
 ]
+GenerationMode = Literal["deterministic", "model"]
 
 
 class ContractModel(BaseModel):
@@ -123,6 +124,8 @@ class AppendMessageResponse(ContractModel):
     evidence: list[dict[str, object]]
     handoff_reason: str | None
     retrieval_mode: RetrievalMode = "not_applicable"
+    generation_mode: GenerationMode = "deterministic"
+    citation_ids: list[str] = []
 
 
 class OrderSummary(ContractModel):
