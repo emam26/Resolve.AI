@@ -1,6 +1,6 @@
 # ResolveAI - one living milestone / reuse index
 
-**Last verified by:** ResolveAI Lead (local source/tests/benchmark/browser/model-contract/Git). **Date:** 2026-11-22. This file is an *index*, not evidence by itself. On opening the project, compare it with actual Git/source/test state; correct discrepancies. Do not mark work completed without inspecting and/or executing checks.
+**Last verified by:** ResolveAI Lead (local source/tests/benchmark/browser/model-contract/Git). **Date:** 2026-11-23. This file is an *index*, not evidence by itself. On opening the project, compare it with actual Git/source/test state; correct discrepancies. Do not mark work completed without inspecting and/or executing checks.
 
 ## Current workspace (Lead-verified)
 - Root guidance, product docs, prompt templates, local skills, design references, and the existing `scripts/notify.ps1` are present.
