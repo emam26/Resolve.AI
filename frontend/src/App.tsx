@@ -459,7 +459,9 @@ export default function App() {
                         <span className="section-label">Investigation result</span>
                         <strong>{latestResolution.handoff_reason ? "Human review recommended" : "Grounded answer"}</strong>
                       </div>
-                      <span className="state-badge">{latestResolution.retrieval_mode}</span>
+                      <span className="state-badge">
+                        {latestResolution.retrieval_mode} · {latestResolution.generation_mode}
+                      </span>
                     </div>
                     {latestResolution.evidence.length > 0 ? (
                       <div className="citation-list">

@@ -55,6 +55,7 @@ export interface SupportInboxResponse {
 }
 
 export type RetrievalMode = "not_applicable" | "lexical" | "semantic" | "lexical_fallback";
+export type GenerationMode = "deterministic" | "model";
 
 export interface PolicyEvidence {
   document_id: string;
@@ -95,6 +96,8 @@ export interface AppendMessageResponse {
   evidence: PolicyEvidence[];
   handoff_reason: string | null;
   retrieval_mode: RetrievalMode;
+  generation_mode: GenerationMode;
+  citation_ids: string[];
 }
 
 interface ErrorEnvelope {
