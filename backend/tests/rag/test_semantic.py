@@ -153,7 +153,7 @@ def test_semantic_retrieval_and_grounding_guard_reject_weak_matches() -> None:
     provider = FakeEmbeddingProvider(
         {
             "Policy section\nshipment estimate": _vector(1.0, 0.0),
-            "unrelated query": _vector(0.6, 0.8),
+            "unrelated query": _vector(0.59, 0.8074),
         }
     )
     retriever = InMemorySemanticRetriever([record], provider)
@@ -198,7 +198,7 @@ def test_pgvector_query_compiles_with_published_audience_filters_and_tie_breakin
     assert "LIMIT" in sql
     assert "published" in compiled.params.values()
     assert "public" in compiled.params.values()
-    assert 1.0 - 0.65 in compiled.params.values()
+    assert 1.0 - 0.60 in compiled.params.values()
 
     with pytest.raises(ValueError, match="384 dimensions"):
         build_pgvector_policy_query([1.0, 0.0], top_k=3)

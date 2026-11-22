@@ -15,9 +15,9 @@ from .models import PolicyAudience, PolicyEvidence, PolicyRecord
 
 DEFAULT_SENTENCE_TRANSFORMER_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 DEFAULT_EMBEDDING_DIMENSIONS = 384
-# This is a conservative provisional gate for the local MiniLM baseline. It
-# must be recalibrated against the frozen evaluation set before production use.
-DEFAULT_SEMANTIC_MINIMUM_SCORE = 0.65
+# This gate is calibrated against the frozen synthetic evaluation set and a
+# natural-language shipment-delay smoke query for the local MiniLM baseline.
+DEFAULT_SEMANTIC_MINIMUM_SCORE = 0.60
 SUPPORTED_AUDIENCES = frozenset(
     {"customer", "support_agent", "refund_approver", "merchant_admin"}
 )

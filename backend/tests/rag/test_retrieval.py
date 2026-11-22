@@ -1,5 +1,7 @@
 from backend.app.rag import (
     DEFAULT_EVALUATION_CASES,
+    EvaluationCase,
+    PolicyEvidence,
     evaluate_policy_retrieval,
     retrieve_published_policy,
 )
@@ -87,3 +89,165 @@ def test_predeclared_evaluation_set_is_perfect_on_offline_corpus() -> None:
     assert report.citation_visibility_accuracy == 1.0
     assert report.unsupported_answer_behavior == 1.0
     assert report.as_dict()["Recall@3"] == 1.0
+
+
+def test_evaluation_uses_injected_retriever_for_semantic_path() -> None:
+    class InjectedRetriever:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, str, int]] = []
+
+        def retrieve_published_policy(
+            self, query: str, audience: str = "customer", top_k: int = 3
+        ) -> list[PolicyEvidence]:
+            self.calls.append((query, audience, top_k))
+            if query == "supported query":
+                return [
+                    PolicyEvidence(
+                        document_id="delivery-policy",
+                        document_version="v2",
+                        section="Delayed shipments",
+                        release_id="release_2026_11_01",
+                        visibility="public",
+                        score=0.9,
+                        text="grounded delivery evidence",
+                    )
+                ]
+            return []
+
+    retriever = InjectedRetriever()
+    report = evaluate_policy_retrieval(
+        cases=(
+            EvaluationCase(
+                label="supported",
+                query="supported query",
+                audience="customer",
+                expected_document_id="delivery-policy",
+                expected_version="v2",
+                expected_section="Delayed shipments",
+                expect_supported_answer=True,
+            ),
+            EvaluationCase(
+                label="unsupported",
+                query="unsupported query",
+                audience="customer",
+                expected_document_id=None,
+                expected_version=None,
+                expected_section=None,
+                expect_supported_answer=False,
+            ),
+        ),
+        policy_retriever=retriever,
+    )
+
+    assert report.recall_at_3 == 1.0
+    assert report.citation_visibility_accuracy == 1.0
+    assert report.unsupported_answer_behavior == 1.0
+    assert retriever.calls == [
+        ("supported query", "customer", 3),
+        ("unsupported query", "customer", 3),
+    ]
+
+
+def test_evaluation_rejects_unpublished_and_internal_injected_evidence() -> None:
+    class UnsafeRetriever:
+        def retrieve_published_policy(
+            self, query: str, audience: str = "customer", top_k: int = 3
+        ) -> list[PolicyEvidence]:
+            del audience, top_k
+            if query == "unpublished":
+                return [
+                    PolicyEvidence(
+                        document_id="delivery-policy",
+                        document_version="v2",
+                        section="Delayed shipments",
+                        release_id="release_2026_11_01",
+                        visibility="public",
+                        score=0.9,
+                        text="unpublished evidence",
+                        status="unpublished",
+                    )
+                ]
+            return [
+                PolicyEvidence(
+                    document_id="refund-review-policy",
+                    document_version="v1",
+                    section="Refund review",
+                    release_id="release_2026_11_01",
+                    visibility="internal",
+                    score=0.9,
+                    text="internal evidence",
+                )
+            ]
+
+    report = evaluate_policy_retrieval(
+        cases=(
+            EvaluationCase(
+                label="unpublished",
+                query="unpublished",
+                audience="customer",
+                expected_document_id="delivery-policy",
+                expected_version="v2",
+                expected_section="Delayed shipments",
+                expect_supported_answer=True,
+            ),
+            EvaluationCase(
+                label="internal",
+                query="internal",
+                audience="customer",
+                expected_document_id="refund-review-policy",
+                expected_version="v1",
+                expected_section="Refund review",
+                expect_supported_answer=True,
+            ),
+        ),
+        policy_retriever=UnsafeRetriever(),
+    )
+
+    assert report.recall_at_3 == 0.0
+    assert report.citation_visibility_accuracy == 0.0
+
+
+def test_evaluation_rejects_wrong_top_ranked_policy() -> None:
+    class MisorderedRetriever:
+        def retrieve_published_policy(
+            self, query: str, audience: str = "customer", top_k: int = 3
+        ) -> list[PolicyEvidence]:
+            del query, audience, top_k
+            return [
+                PolicyEvidence(
+                    document_id="returns-policy",
+                    document_version="v1",
+                    section="Return window",
+                    release_id="release_2026_10_10",
+                    visibility="public",
+                    score=0.95,
+                    text="Unused items may be returned within 30 days of delivery.",
+                ),
+                PolicyEvidence(
+                    document_id="delivery-policy",
+                    document_version="v2",
+                    section="Delayed shipments",
+                    release_id="release_2026_11_01",
+                    visibility="public",
+                    score=0.9,
+                    text="grounded delivery evidence",
+                ),
+            ]
+
+    report = evaluate_policy_retrieval(
+        cases=(
+            EvaluationCase(
+                label="misordered",
+                query="misordered query",
+                audience="customer",
+                expected_document_id="delivery-policy",
+                expected_version="v2",
+                expected_section="Delayed shipments",
+                expect_supported_answer=True,
+            ),
+        ),
+        policy_retriever=MisorderedRetriever(),
+    )
+
+    assert report.recall_at_3 == 1.0
+    assert report.citation_visibility_accuracy == 0.0

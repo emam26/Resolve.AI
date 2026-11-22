@@ -1,13 +1,18 @@
 """Offline labeled evaluation for the deterministic policy retriever."""
 
+from __future__ import annotations
+
 from dataclasses import dataclass
-from typing import Sequence
+from typing import TYPE_CHECKING, Sequence
 
 from pydantic import BaseModel, ConfigDict
 
 from .corpus import POLICY_CORPUS
 from .models import PolicyAudience, PolicyEvidence, PolicyRecord
 from .retrieval import retrieve_published_policy
+
+if TYPE_CHECKING:
+    from backend.app.ai.answer import PolicyRetriever
 
 
 @dataclass(frozen=True)
@@ -111,18 +116,50 @@ class RetrievalEvaluationReport(BaseModel):
         }
 
 
+class _SnapshotPolicyRetriever:
+    """Replay one retrieval result through the answer-layer safety checks."""
+
+    def __init__(self, evidence: Sequence[PolicyEvidence]) -> None:
+        self._evidence = tuple(evidence)
+
+    def retrieve_published_policy(
+        self,
+        query: str,
+        audience: PolicyAudience = "customer",
+        top_k: int = 3,
+    ) -> Sequence[PolicyEvidence]:
+        del query, audience, top_k
+        return self._evidence
+
+
 def _visibility_valid(evidence: PolicyEvidence, audience: PolicyAudience) -> bool:
     if audience == "customer":
         return evidence.visibility == "public"
     return evidence.visibility in {"public", "internal"}
 
 
+def _matches_expected(evidence: PolicyEvidence, case: EvaluationCase) -> bool:
+    return (
+        case.expected_document_id is not None
+        and evidence.document_id == case.expected_document_id
+        and evidence.document_version == case.expected_version
+        and evidence.section == case.expected_section
+        and evidence.status == "published"
+    )
+
+
 def evaluate_policy_retrieval(
     cases: Sequence[EvaluationCase] = DEFAULT_EVALUATION_CASES,
     *,
     corpus: Sequence[PolicyRecord] = POLICY_CORPUS,
+    policy_retriever: PolicyRetriever | None = None,
 ) -> RetrievalEvaluationReport:
-    """Evaluate retrieval plus unsupported-answer behavior without model calls."""
+    """Evaluate retrieval and grounding with lexical or injected retrieval.
+
+    The default remains the deterministic lexical baseline. Supplying the
+    application retrieval boundary lets the same frozen labels evaluate a
+    semantic/pgvector backend without duplicating policy-access assertions.
+    """
 
     if not cases:
         raise ValueError("at least one evaluation case is required")
@@ -140,17 +177,20 @@ def evaluate_policy_retrieval(
     from backend.app.ai.answer import answer_from_published_policy
 
     for case in cases:
-        retrieved = retrieve_published_policy(
-            case.query, case.audience, top_k=3, corpus=corpus
-        )
-        expected_hit = (
-            case.expected_document_id is not None
-            and any(
-                evidence.document_id == case.expected_document_id
-                and evidence.document_version == case.expected_version
-                and evidence.section == case.expected_section
-                for evidence in retrieved
+        if policy_retriever is None:
+            retrieved = retrieve_published_policy(
+                case.query, case.audience, top_k=3, corpus=corpus
             )
+        else:
+            retrieved = list(
+                policy_retriever.retrieve_published_policy(
+                    case.query, audience=case.audience, top_k=3
+                )
+            )
+        expected_hit = any(
+            _matches_expected(evidence, case)
+            and _visibility_valid(evidence, case.audience)
+            for evidence in retrieved
         )
         if case.expected_document_id is not None:
             recall_total += 1
@@ -174,6 +214,8 @@ def evaluate_policy_retrieval(
             wrong_version_count += int(wrong_version)
 
         citation_valid = all(
+            evidence.status == "published"
+            and
             evidence.release_id
             and evidence.document_version
             and evidence.section
@@ -184,20 +226,38 @@ def evaluate_policy_retrieval(
             citation_valid = citation_valid and not retrieved
         else:
             citation_valid = citation_valid and expected_hit
-        visibility_valid_count += int(citation_valid)
-
         answer = answer_from_published_policy(
-            case.query, audience=case.audience, corpus=corpus
+            case.query,
+            audience=case.audience,
+            corpus=corpus,
+            policy_retriever=(
+                _SnapshotPolicyRetriever(retrieved)
+                if policy_retriever is not None
+                else None
+            ),
+        )
+        grounded_answer_valid = (
+            answer.answer is not None
+            and answer.evidence != []
+            and answer.grounded is True
+            and answer.needs_handoff is False
+        )
+        selected_expected = bool(answer.evidence) and _matches_expected(
+            answer.evidence[0], case
         )
         unsupported_valid = (
-            (not case.expect_supported_answer)
-            == (
+            grounded_answer_valid and selected_expected
+            if case.expect_supported_answer
+            else (
                 answer.answer is None
                 and answer.evidence == []
                 and answer.grounded is False
                 and answer.needs_handoff is True
             )
         )
+        if case.expect_supported_answer:
+            citation_valid = citation_valid and unsupported_valid
+        visibility_valid_count += int(citation_valid)
         if not case.expect_supported_answer:
             unsupported_total += 1
             unsupported_valid_count += int(unsupported_valid)
