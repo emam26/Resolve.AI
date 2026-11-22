@@ -5,10 +5,13 @@ from __future__ import annotations
 import os
 
 import pytest
+from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 
+from backend.app.api import create_app
 from backend.app.rag.corpus import POLICY_CORPUS
 from backend.app.rag.pgvector_store import (
+    PolicyEmbeddingRow,
     PgVectorPolicyRetriever,
     create_pgvector_schema,
     seed_policy_embeddings,
@@ -55,6 +58,7 @@ def pg_retriever() -> PgVectorPolicyRetriever:
     try:
         yield retriever
     finally:
+        retriever.close()
         engine.dispose()
 
 
@@ -90,3 +94,98 @@ def test_postgres_results_are_repeatable(pg_retriever) -> None:
     second = pg_retriever.retrieve_published_policy("shipment delayed")
 
     assert first == second
+
+
+def test_customer_api_uses_real_postgres_retriever(pg_retriever) -> None:
+    database_url = os.environ["RESOLVEAI_TEST_POSTGRES_URL"]
+    client = TestClient(
+        create_app(database_url=database_url, policy_retriever=pg_retriever)
+    )
+    login = client.post(
+        "/api/v1/auth/demo-login", json={"demo_actor_id": "customer_001"}
+    )
+    headers = {"Authorization": f"Bearer {login.json()['session_id']}"}
+    conversation = client.post(
+        "/api/v1/conversations",
+        headers=headers,
+        json={"channel": "widget", "order_id": None},
+    )
+
+    response = client.post(
+        f"/api/v1/conversations/{conversation.json()['conversation_id']}/messages",
+        headers=headers,
+        json={"content": "What should I do about a shipment delay?"},
+    )
+
+    assert login.status_code == 200
+    assert conversation.status_code == 201
+    assert response.status_code == 201
+    body = response.json()
+    assert body["retrieval_mode"] == "semantic"
+    assert body["assistant_reply"]["content"] == (
+        "If a shipment is delayed, contact support for an updated estimate."
+    )
+    assert body["evidence"][0]["document_version"] == "v2"
+
+
+def test_postgres_threshold_excludes_below_minimum_score(pg_retriever) -> None:
+    retriever = PgVectorPolicyRetriever(
+        os.environ["RESOLVEAI_TEST_POSTGRES_URL"],
+        DeterministicEmbeddingProvider(),
+        minimum_score=0.9,
+    )
+    try:
+        assert retriever.retrieve_published_policy("shipment") == []
+    finally:
+        retriever.close()
+
+
+def test_postgres_equal_scores_use_stable_metadata_order(pg_retriever) -> None:
+    database_url = os.environ["RESOLVEAI_TEST_POSTGRES_URL"]
+    engine = create_engine(database_url, future=True)
+    test_document_ids = ("aaa-policy", "zzz-policy")
+    try:
+        with engine.begin() as connection:
+            connection.execute(
+                PolicyEmbeddingRow.__table__.insert(),
+                [
+                    {
+                        "document_id": "zzz-policy",
+                        "document_version": "v1",
+                        "section": "Shipment guidance",
+                        "release_id": "release_test",
+                        "status": "published",
+                        "visibility": "public",
+                        "text": "Shipment guidance for another test policy.",
+                        "embedding": [1.0] + [0.0] * 383,
+                    },
+                    {
+                        "document_id": "aaa-policy",
+                        "document_version": "v1",
+                        "section": "Shipment guidance",
+                        "release_id": "release_test",
+                        "status": "published",
+                        "visibility": "public",
+                        "text": "Shipment guidance for a test policy.",
+                        "embedding": [1.0] + [0.0] * 383,
+                    },
+                ],
+            )
+        retriever = PgVectorPolicyRetriever(
+            database_url,
+            DeterministicEmbeddingProvider(),
+            minimum_score=0.0,
+        )
+        results = retriever.retrieve_published_policy("shipment", top_k=2)
+
+        assert [result.document_id for result in results] == list(test_document_ids)
+    finally:
+        if "retriever" in locals():
+            retriever.close()
+        with engine.begin() as connection:
+            connection.execute(
+                PolicyEmbeddingRow.__table__.delete().where(
+                    PolicyEmbeddingRow.document_id.in_(test_document_ids)
+                )
+            )
+        engine.dispose()

@@ -101,6 +101,11 @@ class PgVectorPolicyRetriever:
             for row, distance in rows
         ]
 
+    def close(self) -> None:
+        """Release the SQLAlchemy engine owned by this retriever."""
+
+        self._engine.dispose()
+
 
 def create_pgvector_schema(engine: Engine) -> None:
     """Create the extension and table for a provisioned PostgreSQL database."""
