@@ -19,6 +19,7 @@ from .pgvector_store import (
     create_pgvector_schema,
     seed_policy_embeddings,
 )
+from .fulltext import PostgresFullTextPolicyRetriever
 from .retrieval import is_sufficient_policy_match, retrieve_published_policy
 
 __all__ = [
@@ -31,6 +32,7 @@ __all__ = [
     "PolicyRecord",
     "PolicyEmbeddingRow",
     "PgVectorPolicyRetriever",
+    "PostgresFullTextPolicyRetriever",
     "RetrievalEvaluationReport",
     "evaluate_policy_retrieval",
     "get_policy_corpus",
