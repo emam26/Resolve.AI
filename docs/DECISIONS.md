@@ -13,5 +13,6 @@
 | Offline mocked tests default, user runs paid external calls | Avoid accidental runtime API costs | Frozen |
 | Inject policy retrieval through the existing LangGraph answer node; report retrieval mode and fall back to lexical on backend failure | Preserve one controlled workflow, keep deterministic local operation, and avoid presenting degraded retrieval as semantic success | M6 |
 | Import the verified synthetic ecommerce subset into namespaced `commerce_*` tables through a narrow read-only repository | Keeps the publisher DDL out of ResolveAI, preserves existing fixtures/persistence, avoids a second permanent database, and prevents public-ID collisions | M11A |
+| Keep raw/imported commerce data, generated exports/snapshots, and private evaluation holdouts outside the public repository | Public GitHub needs reproducible importer/schema code and small invented fixtures, not operational rows or answer keys; history is not rewritten retroactively | M11A privacy audit |
 
 Do not record every implementation detail here; use Git commits/tests and `docs/PROJECT_STATE.md` for routine progress. A new decision entry requires the problem, chosen option, and rationale.

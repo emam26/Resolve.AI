@@ -10,10 +10,16 @@ integration and it never contains production customer data.
 - Required SHA-256: `8CE7F80D9A67C0664CCCB1A8211BB9CFA76E0192F636464E42542257B4BB408B`
 - Deterministic cohort: `orders.id <= 3620`
 - Expected selected order items: `10,000`
+- The publisher identifies version 2 as **CC0 1.0 Public Domain**; see the
+  [publisher dataset page](https://databasesample.com/datasets/ecommerce-sample-database)
+  and [CC0 1.0 deed](https://creativecommons.org/publicdomain/zero/1.0/).
 
-The archive and publisher schema are staged outside this repository and are
-not committed. Import the archive into a disposable, read-only source database
-first; never run the publisher's DDL against ResolveAI's application database.
+The archive, publisher schema, imported rows, generated operational records,
+and database snapshots are staged outside this repository and are not
+committed. The repository's `.gitignore` also excludes raw SQL/CSV/Parquet/
+SQLite/database-dump formats, exports, snapshots, and private holdouts.
+Import the archive into a disposable, read-only source database first; never
+run the publisher's DDL against ResolveAI's application database.
 The checksum verifies the archive presented to the operator; it cannot
 cryptographically prove that an independently configured source database was
 loaded from that archive. The source database is therefore a local staging
@@ -75,6 +81,18 @@ Set `RESOLVEAI_COMMERCE_DATABASE_URL` when running the API to enable imported
 orders. Without it, the existing in-memory development fixtures remain the
 default.
 
+## Company policy corpus
+
+Customer policy answers use the separate fictional corpus in
+`backend/app/rag/corpus.py`, not imported commerce records. It currently has
+18 versioned sections across 12 policy documents, including published public
+guidance, two unpublished superseded revisions, and two published staff-only
+sections. The local MiniLM/pgvector seed is repeatable and stores policy text,
+release, version, publication status, visibility, and embeddings together so
+retrieval can enforce access controls before evidence reaches an answer.
+The deterministic lexical retriever remains the offline baseline and the
+customer workflow retains its safe handoff when evidence is insufficient.
+
 ## Generated investigation scenarios
 
 The source tickets remain historical source data. ResolveAI adds ten clearly
@@ -91,15 +109,13 @@ not create refund transactions or call a payment provider.
 
 ## Grounded evaluation labels
 
-`backend/app/commerce/evaluation.py` contains 100 predeclared customer-
-investigation cases: 80 development and 20 holdout. Related order/customer
-groups remain in one split. Labels identify authorization context, order,
-expected published policy (or required abstention), supported facts, handoff,
-workflow outcome, and security constraint. The database integration check
-validates referenced order ownership and that any expected customer policy is
-published and public; the labels are not inferred from model output. Only the
-five cases for source user `3398` have the deliberately provisioned
-`customer_001` runtime demo identity. The remaining cases are explicitly
-offline owner labels, not login-enabled accounts. The frozen labels are also
-executed through the deterministic lexical answer contract to catch a drift in
-published evidence, version, visibility, or safe-abstention behavior.
+`backend/app/commerce/evaluation.py` contains 80 predeclared public development
+cases. Related order/customer groups remain in one split. Labels identify
+authorization context, expected published policy (or required abstention),
+supported facts, handoff, workflow outcome, and security constraint. The
+database integration check validates referenced order ownership and that any
+expected customer policy is published and public; labels are not inferred from
+model output. Private holdout labels and answer keys are retained only in the
+local staging workspace and are not distributed through GitHub. The public
+labels are executed through the deterministic lexical answer contract to catch
+drift in published evidence, version, visibility, or safe-abstention behavior.
