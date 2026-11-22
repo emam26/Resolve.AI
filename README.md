@@ -181,7 +181,7 @@ npm run typecheck
 npm run build
 ```
 
-The same backend and frontend checks are defined in [`.github/workflows/ci.yml`](.github/workflows/ci.yml). The current local verification passed 68 backend tests, including eight PostgreSQL integration tests, with no skips while the disposable database was running. Frontend typecheck and the production build also pass. A separate five-case real semantic evaluation matched the lexical baseline: Recall@3 1.0, wrong-version exposure 0.0, citation/visibility accuracy 1.0, and unsupported behavior 1.0 for both.
+The same backend and frontend checks are defined in [`.github/workflows/ci.yml`](.github/workflows/ci.yml). The current local verification passed 75 backend tests, including 11 PostgreSQL integration tests, with no skips while the disposable database was running. Frontend typecheck and the production build also pass. The M8 comparison below uses a frozen 15-case set and reports retrieval and answer-contract results separately.
 
 ### PostgreSQL policy index (optional)
 
@@ -198,6 +198,24 @@ Pop-Location
 
 The migration, idempotent real-embedding seed command, and frozen five-case semantic evaluation were verified locally against PostgreSQL 16/pgvector. The evaluation command is read-only and requires the configured model to already be cached; it does not download models. The default CI tests use deterministic embeddings. Production database provisioning, extension permissions, and live service operations remain outside this repository’s verification scope.
 
+### Retrieval comparison (M8)
+
+After migration and seeding, run the reproducible three-way benchmark from the repository root:
+
+```powershell
+.\.venv\Scripts\python.exe -m backend.app.rag.benchmark
+```
+
+The frozen set contains the original five evaluation cases plus 10 customer-facing challenge cases. It includes paraphrases, vocabulary mismatches, ambiguous and outdated-language requests, irrelevant questions, internal-only policy questions, and publication/version restrictions. The answer-contract score counts a result only when the top evidence is published, audience-visible, has a deterministic answer template, and matches the labeled policy; unsupported cases must produce no evidence. Latencies are warm steady-state retrieval measurements with three repeats per query.
+
+| Method | Recall@3 | MRR | Answer contract | Unsupported behavior | Citation/access | Wrong version | p50 / p95 latency |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Existing lexical baseline | 0.80 | 0.80 | 0.867 | 1.00 | 1.00 | 0.00 | 0.014 / 0.023 ms |
+| PostgreSQL full-text (benchmark only) | 0.30 | 0.30 | 0.533 | 1.00 | 1.00 | 0.00 | 1.696 / 2.317 ms |
+| Semantic pgvector | 0.60 | 0.60 | 0.733 | 1.00 | 1.00 | 0.00 | 52.037 / 56.076 ms |
+
+On this small synthetic corpus, PostgreSQL full-text search adds no measured value beyond the existing methods and is substantially slower than the in-process lexical baseline. It is therefore retained as a benchmark implementation only; it is not added to the customer investigation path. The lexical baseline remains the strongest aggregate result on this labeled set, while semantic retrieval remains the configured path for the existing M7 workflow and its safe lexical fallback.
+
 ## Synthetic data and safety boundaries
 
 ResolveAI uses one fictional merchant and seeded records only. Demo actors include `customer_001`, `support_001`, `refund_approver_001`, and `merchant_admin_001`. Demo login is a development convenience, not production authentication. Server-side role and ownership checks still apply to the synthetic records.
@@ -213,7 +231,7 @@ No Shopify or other commerce integration, real customer data, payment provider, 
 
 ## Roadmap
 
-- Add the planned PostgreSQL full-text comparison and measure it against the lexical and semantic baselines.
+- Expand the synthetic policy corpus and challenge labels before recalibrating semantic retrieval on broader vocabulary.
 - Connect the controlled investigation workflow to an owner-approved model SDK behind explicit cost and credential controls.
 - Add a reproducible browser-test runner when the project’s supported automation environment is standardized.
 - Consider production identity, merchant integrations, multi-tenant isolation, and billing only after the single-merchant slice is hardened.
@@ -221,7 +239,8 @@ No Shopify or other commerce integration, real customer data, payment provider, 
 ## Limitations
 
 - The customer API uses a deterministic local classifier and mocked model boundary; it is not a live provider integration.
-- The semantic and pgvector paths are verified locally with real sentence-transformers embeddings and deterministic CI coverage; the five-case evaluation showed parity with the lexical baseline rather than a measured quality gain.
+- The semantic and pgvector paths are verified locally with real sentence-transformers embeddings and deterministic CI coverage. On the M8 15-case comparison, semantic retrieval reached 0.60 Recall@3 versus 0.80 for lexical; these are small synthetic-corpus results, not production benchmarks.
+- PostgreSQL full-text search is implemented for offline comparison only. It reached 0.30 Recall@3 and is not part of the customer runtime.
 - SQLite remains the default local persistence path. PostgreSQL, Docker/WSL, and browser automation were verified only against disposable synthetic data, not production infrastructure.
 - Demo authentication, seeded identities, and the single fictional merchant are not suitable for production use.
 
