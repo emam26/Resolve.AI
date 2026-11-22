@@ -2,7 +2,7 @@
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 PolicyAudience = Literal[
@@ -37,7 +37,12 @@ class PolicyRecord(PolicyModel):
 
 
 class PolicyEvidence(PolicyModel):
-    """The exact evidence shape frozen by the M2 contract."""
+    """The exact evidence shape frozen by the M2 contract.
+
+    ``status`` is an internal guard and is excluded from transport JSON. It
+    lets the answer boundary re-check publication even when a retriever is
+    injected, without changing the public citation shape.
+    """
 
     document_id: str
     document_version: str
@@ -46,6 +51,7 @@ class PolicyEvidence(PolicyModel):
     visibility: PolicyVisibility
     score: float
     text: str
+    status: PolicyStatus = Field(default="published", exclude=True)
 
 
 # A citation is intentionally the same transport shape as evidence in M2.

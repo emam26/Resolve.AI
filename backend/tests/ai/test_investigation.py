@@ -8,6 +8,7 @@ from backend.app.ai.investigation import (
     OrderFacts,
     run_investigation,
 )
+from backend.app.rag.models import PolicyEvidence
 
 
 class FakeFactsTool:
@@ -21,6 +22,33 @@ class FakeFactsTool:
         if self.facts is None or self.facts.order_id != order_id:
             return None
         return self.facts
+
+
+class FakePolicyRetriever:
+    def __init__(self, *, fail: bool = False) -> None:
+        self.fail = fail
+        self.calls: list[tuple[str, str, int]] = []
+
+    def retrieve_published_policy(
+        self, query: str, audience: str = "customer", top_k: int = 3
+    ) -> list[PolicyEvidence]:
+        if self.fail:
+            raise RuntimeError("semantic backend unavailable")
+        self.calls.append((query, audience, top_k))
+        return [
+            PolicyEvidence(
+                document_id="delivery-policy",
+                document_version="v2",
+                section="Delayed shipments",
+                release_id="release_2026_11_01",
+                visibility="public",
+                score=0.92,
+                text=(
+                    "If a shipment is delayed, customers may contact support for an "
+                    "updated estimate."
+                ),
+            )
+        ]
 
 
 def test_policy_question_uses_existing_grounded_answer_and_trace() -> None:
@@ -40,6 +68,45 @@ def test_policy_question_uses_existing_grounded_answer_and_trace() -> None:
     )
     assert result.evidence[0].document_version == "v2"
     assert result.trace == ["classify", "answer_policy"]
+
+
+def test_policy_question_uses_injected_retriever_through_workflow() -> None:
+    retriever = FakePolicyRetriever()
+    result = run_investigation(
+        "late parcel estimate",
+        model=MockInvestigationModel(
+            {"late parcel estimate": ModelDecision(intent="policy_question")}
+        ),
+        facts_tool=FakeFactsTool(),
+        conversation_state="AI_ACTIVE",
+        policy_retriever=retriever,
+    )
+
+    assert result.outcome == "ANSWER"
+    assert result.answer == (
+        "If a shipment is delayed, contact support for an updated estimate."
+    )
+    assert result.evidence[0].document_version == "v2"
+    assert retriever.calls == [("late parcel estimate", "customer", 3)]
+    assert result.trace == ["classify", "answer_policy"]
+
+
+def test_policy_retriever_failure_falls_back_through_workflow() -> None:
+    result = run_investigation(
+        "shipment delayed",
+        model=MockInvestigationModel(
+            {"shipment delayed": ModelDecision(intent="policy_question")}
+        ),
+        facts_tool=FakeFactsTool(),
+        conversation_state="AI_ACTIVE",
+        policy_retriever=FakePolicyRetriever(fail=True),
+    )
+
+    assert result.outcome == "ANSWER"
+    assert result.answer == (
+        "If a shipment is delayed, contact support for an updated estimate."
+    )
+    assert result.evidence[0].document_version == "v2"
 
 
 def test_order_status_uses_only_typed_verified_facts() -> None:

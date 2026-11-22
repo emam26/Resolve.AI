@@ -14,7 +14,7 @@ from pydantic import BaseModel, ConfigDict
 
 from backend.app.contracts import ConversationState, OrderStatus, ShipmentStatus
 from backend.app.rag.models import PolicyAudience, PolicyEvidence
-from backend.app.ai.answer import answer_from_published_policy
+from backend.app.ai.answer import PolicyRetriever, answer_from_published_policy
 
 
 InvestigationIntent = Literal[
@@ -24,6 +24,12 @@ InvestigationIntent = Literal[
     "unknown",
 ]
 InvestigationOutcome = Literal["ANSWER", "HANDOFF"]
+RetrievalMode = Literal[
+    "not_applicable",
+    "lexical",
+    "semantic",
+    "lexical_fallback",
+]
 
 
 class OrderFacts(BaseModel):
@@ -55,6 +61,7 @@ class InvestigationResult(BaseModel):
     evidence: list[PolicyEvidence]
     handoff_reason: str | None
     trace: list[str]
+    retrieval_mode: RetrievalMode = "not_applicable"
 
 
 class InvestigationModel(Protocol):
@@ -94,6 +101,7 @@ class _InvestigationState(TypedDict, total=False):
     order_id: str | None
     model: InvestigationModel
     facts_tool: OrderFactsTool
+    policy_retriever: PolicyRetriever | None
     intent: InvestigationIntent
     facts: OrderFacts | None
     result: InvestigationResult
@@ -175,10 +183,13 @@ def _answer_order(state: _InvestigationState) -> dict[str, object]:
 
 def _answer_policy(state: _InvestigationState) -> dict[str, object]:
     grounded = answer_from_published_policy(
-        state["query"], audience=state["audience"]
+        state["query"],
+        audience=state["audience"],
+        policy_retriever=state.get("policy_retriever"),
     )
     if not grounded.grounded or grounded.answer is None:
         result = _handoff_result(state, "insufficient_published_policy", "answer_policy")
+        result = result.model_copy(update={"retrieval_mode": grounded.retrieval_mode})
     else:
         result = InvestigationResult(
             outcome="ANSWER",
@@ -186,6 +197,7 @@ def _answer_policy(state: _InvestigationState) -> dict[str, object]:
             evidence=grounded.evidence,
             handoff_reason=None,
             trace=_trace(state, "answer_policy"),
+            retrieval_mode=grounded.retrieval_mode,  # type: ignore[arg-type]
         )
     return {"result": result, "trace": _trace(state, "answer_policy")}
 
@@ -256,6 +268,7 @@ def run_investigation(
     audience: PolicyAudience = "customer",
     conversation_state: ConversationState,
     order_id: str | None = None,
+    policy_retriever: PolicyRetriever | None = None,
 ) -> InvestigationResult:
     """Run the finite investigation graph and fail closed on tool/model errors."""
 
@@ -283,6 +296,7 @@ def run_investigation(
         "order_id": order_id,
         "model": model,
         "facts_tool": facts_tool,
+        "policy_retriever": policy_retriever,
         "trace": [],
     }
     try:
@@ -312,9 +326,11 @@ __all__ = [
     "InvestigationModel",
     "InvestigationOutcome",
     "InvestigationResult",
+    "RetrievalMode",
     "MockInvestigationModel",
     "ModelDecision",
     "OrderFacts",
     "OrderFactsTool",
+    "PolicyRetriever",
     "run_investigation",
 ]

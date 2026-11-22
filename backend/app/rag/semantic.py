@@ -184,6 +184,7 @@ def _to_evidence(record: PolicyRecord, score: float) -> PolicyEvidence:
         visibility=record.visibility,
         score=float(score),
         text=record.text,
+        status=record.status,
     )
 
 

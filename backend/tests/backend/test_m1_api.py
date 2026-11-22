@@ -117,7 +117,15 @@ def test_conversation_lifecycle_is_server_authored_and_deterministic() -> None:
         "content": "Where is my order?",
         "created_at": "2026-11-21T12:00:00Z",
     }
-    assert message.json()["assistant_reply"] is None
+    assert message.json()["assistant_reply"] == {
+        "message_id": "msg_1002",
+        "author_type": "assistant",
+        "content": (
+            "Order order_1001 is delayed; shipment is delayed. "
+            "Estimated delivery: 2026-11-08."
+        ),
+        "created_at": "2026-11-21T12:00:00Z",
+    }
     assert message.json()["evidence"] == []
     assert message.json()["handoff_reason"] is None
 
@@ -125,7 +133,10 @@ def test_conversation_lifecycle_is_server_authored_and_deterministic() -> None:
         f"/api/v1/conversations/{conversation_id}", headers=headers
     )
     assert transcript.status_code == 200
-    assert transcript.json()["messages"] == [message.json()["message"]]
+    assert transcript.json()["messages"] == [
+        message.json()["message"],
+        message.json()["assistant_reply"],
+    ]
 
 
 def test_conversation_ownership_and_empty_message_errors() -> None:

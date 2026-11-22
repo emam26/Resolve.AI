@@ -24,6 +24,8 @@ from backend.app.contracts import (
     SupportConversationSummary,
     SupportInboxResponse,
 )
+from backend.app.ai.answer import PolicyRetriever
+from backend.app.ai.investigation import InvestigationModel
 from backend.app.services.in_memory import (
     ConversationStateConflict,
     ForbiddenOperation,
@@ -31,6 +33,8 @@ from backend.app.services.in_memory import (
     InMemoryResolveService,
     RefundValidationError,
 )
+from backend.app.rag.pgvector_store import PgVectorPolicyRetriever
+from backend.app.rag.semantic import SentenceTransformerEmbeddingProvider
 
 
 UNAUTHENTICATED = {
@@ -54,13 +58,35 @@ def _bearer_token(authorization: str | None) -> str | None:
     return token
 
 
+def _configured_policy_retriever(database_url: str) -> PolicyRetriever | None:
+    """Opt into local semantic retrieval only for an explicitly configured PG app."""
+
+    if os.getenv("RESOLVEAI_POLICY_RETRIEVAL", "lexical").casefold() != "semantic":
+        return None
+    if not database_url.startswith(("postgresql", "postgres")):
+        return None
+    provider = SentenceTransformerEmbeddingProvider(
+        model_name=os.getenv(
+            "RESOLVEAI_SENTENCE_TRANSFORMER_MODEL",
+            "sentence-transformers/all-MiniLM-L6-v2",
+        ),
+        local_files_only=True,
+    )
+    return PgVectorPolicyRetriever(database_url, provider)
+
+
 class _RefundDecisionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     note: str | None = Field(default=None, max_length=500)
 
 
-def create_app(database_url: str | None = None) -> FastAPI:
+def create_app(
+    database_url: str | None = None,
+    *,
+    policy_retriever: PolicyRetriever | None = None,
+    investigation_model: InvestigationModel | None = None,
+) -> FastAPI:
     """Create an API application with configurable local conversation storage."""
 
     app = FastAPI()
@@ -79,8 +105,18 @@ def create_app(database_url: str | None = None) -> FastAPI:
     configured_database_url = database_url or os.getenv(
         "RESOLVEAI_DATABASE_URL", "sqlite+pysqlite:///:memory:"
     )
-    service = InMemoryResolveService(configured_database_url)
+    configured_policy_retriever = (
+        policy_retriever
+        if policy_retriever is not None
+        else _configured_policy_retriever(configured_database_url)
+    )
+    service = InMemoryResolveService(
+        configured_database_url,
+        policy_retriever=configured_policy_retriever,
+        investigation_model=investigation_model,
+    )
     app.state.service = service
+    app.state.policy_retriever = configured_policy_retriever
     router = APIRouter(prefix="/api/v1")
 
     @app.exception_handler(RequestValidationError)

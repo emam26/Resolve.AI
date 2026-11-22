@@ -82,6 +82,7 @@ export interface AppendMessageResponse {
   assistant_reply: ConversationMessage | null;
   evidence: Record<string, unknown>[];
   handoff_reason: string | null;
+  retrieval_mode: "not_applicable" | "lexical" | "semantic" | "lexical_fallback";
 }
 
 interface ErrorEnvelope {

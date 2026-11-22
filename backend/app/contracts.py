@@ -22,6 +22,12 @@ RefundState = Literal[
     "APPROVED_EXTERNAL_ACTION_REQUIRED",
     "REJECTED",
 ]
+RetrievalMode = Literal[
+    "not_applicable",
+    "lexical",
+    "semantic",
+    "lexical_fallback",
+]
 
 
 class ContractModel(BaseModel):
@@ -116,6 +122,7 @@ class AppendMessageResponse(ContractModel):
     assistant_reply: Message | None
     evidence: list[dict[str, object]]
     handoff_reason: str | None
+    retrieval_mode: RetrievalMode = "not_applicable"
 
 
 class OrderSummary(ContractModel):

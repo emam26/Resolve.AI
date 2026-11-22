@@ -220,6 +220,43 @@ class ConversationRepository:
             )
         return self.get(conversation_id)
 
+    def append_message_if_state(
+        self,
+        conversation_id: str,
+        *,
+        expected_state: str,
+        author_type: str,
+        content: str,
+        created_at: datetime,
+    ) -> StoredConversation | None:
+        """Append only while the conversation remains in the expected state."""
+
+        with self._session_factory.begin() as session:
+            # The conditional update acquires the row lock on PostgreSQL and
+            # makes the state check and subsequent insert one transaction.
+            state_guard = session.execute(
+                update(ConversationRow)
+                .where(
+                    ConversationRow.conversation_id == conversation_id,
+                    ConversationRow.state == expected_state,
+                )
+                .values(state=expected_state)
+            )
+            if state_guard.rowcount != 1:
+                return None
+            message_number = self._allocate_number(session, "message")
+            session.add(
+                MessageRow(
+                    message_id=f"msg_{message_number}",
+                    conversation_id=conversation_id,
+                    sequence_number=message_number,
+                    author_type=author_type,
+                    content=content,
+                    created_at=_utc(created_at),
+                )
+            )
+        return self.get(conversation_id)
+
     def transition(
         self,
         conversation_id: str,

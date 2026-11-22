@@ -5,6 +5,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 
+from backend.app.ai.answer import PolicyRetriever
+from backend.app.ai.investigation import (
+    InvestigationModel,
+    ModelDecision,
+    OrderFacts,
+    run_investigation,
+)
 from backend.app.contracts import (
     ActorSummary,
     AppendMessageResponse,
@@ -20,6 +27,55 @@ from backend.app.contracts import (
     SupportInboxResponse,
 )
 from backend.app.db import ConversationRepository, RefundRepository, StoredConversation, StoredRefund
+
+
+class _DemoInvestigationModel:
+    """Deterministic local classifier used until a model SDK is authorized."""
+
+    def classify(self, query: str) -> ModelDecision:
+        normalized = query.casefold()
+        if "refund" in normalized:
+            return ModelDecision(intent="refund_request")
+        if any(
+            phrase in normalized
+            for phrase in (
+                "where is",
+                "order status",
+                "track my",
+                "tracking",
+                "delivery status",
+                "shipment status",
+            )
+        ):
+            return ModelDecision(intent="order_status")
+        # Policy retrieval is the safe default for non-transactional
+        # questions.  The grounded-answer layer hands off when evidence is
+        # insufficient rather than inventing a response.
+        return ModelDecision(intent="policy_question")
+
+
+class _AuthorizedOrderFactsTool:
+    """Typed order-facts boundary scoped to the authenticated customer."""
+
+    def __init__(self, service: "InMemoryResolveService", customer_id: str | None) -> None:
+        self._service = service
+        self._customer_id = customer_id
+
+    def get_order_facts(self, order_id: str) -> OrderFacts | None:
+        record = self._service._orders.get(order_id)
+        if record is None or record.owner_customer_id != self._customer_id:
+            return None
+        summary = record.summary
+        return OrderFacts(
+            order_id=summary.order_id,
+            status=summary.status,
+            shipment_status=summary.shipment_status,
+            estimated_delivery=(
+                None
+                if summary.estimated_delivery_date is None
+                else summary.estimated_delivery_date.isoformat()
+            ),
+        )
 
 
 DEMO_ACTOR_ID = "customer_001"
@@ -59,8 +115,16 @@ class _OrderRecord:
 class InMemoryResolveService:
     """Per-application synthetic data with configurable conversation storage."""
 
-    def __init__(self, database_url: str | None = None) -> None:
+    def __init__(
+        self,
+        database_url: str | None = None,
+        *,
+        policy_retriever: PolicyRetriever | None = None,
+        investigation_model: InvestigationModel | None = None,
+    ) -> None:
         self._sessions: dict[str, str] = {}
+        self._policy_retriever = policy_retriever
+        self._investigation_model = investigation_model or _DemoInvestigationModel()
         configured_database_url = database_url or "sqlite+pysqlite:///:memory:"
         self._repository = ConversationRepository(configured_database_url)
         self._refund_repository = RefundRepository(configured_database_url)
@@ -208,13 +272,54 @@ class InMemoryResolveService:
         if updated is None:
             return None
         message = updated.messages[-1]
+        investigation = run_investigation(
+            content,
+            model=self._investigation_model,
+            facts_tool=_AuthorizedOrderFactsTool(self, actor.customer_id),
+            audience="customer",
+            conversation_state=updated.state,  # type: ignore[arg-type]
+            order_id=updated.order_id,
+            policy_retriever=self._policy_retriever,
+        )
+        assistant_reply = None
+        if investigation.outcome == "ANSWER" and investigation.answer is not None:
+            with_assistant = self._repository.append_message_if_state(
+                conversation_id,
+                expected_state="AI_ACTIVE",
+                author_type="assistant",
+                content=investigation.answer,
+                created_at=MESSAGE_TIMESTAMP,
+            )
+            if with_assistant is None:
+                current = self._repository.get(conversation_id)
+                return AppendMessageResponse(
+                    conversation_id=conversation_id,
+                    state=(
+                        updated.state
+                        if current is None
+                        else current.state  # type: ignore[arg-type]
+                    ),
+                    message=self._message(message),
+                    assistant_reply=None,
+                    evidence=[],
+                    handoff_reason=(
+                        "conversation_not_ai_active"
+                        if current is not None and current.state != "AI_ACTIVE"
+                        else "assistant_reply_unavailable"
+                    ),
+                    retrieval_mode=investigation.retrieval_mode,
+                )
+            assistant_reply = self._message(with_assistant.messages[-1])
         return AppendMessageResponse(
             conversation_id=updated.conversation_id,
             state=updated.state,
             message=self._message(message),
-            assistant_reply=None,
-            evidence=[],
-            handoff_reason=None,
+            assistant_reply=assistant_reply,
+            evidence=[
+                evidence.model_dump(mode="json") for evidence in investigation.evidence
+            ],
+            handoff_reason=investigation.handoff_reason,
+            retrieval_mode=investigation.retrieval_mode,
         )
 
     def handoff(

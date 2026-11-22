@@ -161,3 +161,35 @@ def test_repository_sequences_preserve_ids_and_message_order(tmp_path: Path) -> 
         "msg_1001",
         "msg_1002",
     ]
+
+
+def test_assistant_append_requires_ai_active_state(tmp_path: Path) -> None:
+    repository = ConversationRepository(
+        f"sqlite+pysqlite:///{tmp_path / 'state-guard.db'}"
+    )
+    repository.create_conversation(
+        owner_customer_id="customer_001",
+        channel="widget",
+        state="AI_ACTIVE",
+        order_id=None,
+        created_at=datetime.now(),
+    )
+    transitioned = repository.transition(
+        "conv_1001",
+        expected_state="AI_ACTIVE",
+        new_state="HANDOFF_QUEUED",
+    )
+    assert transitioned is not None
+
+    blocked = repository.append_message_if_state(
+        "conv_1001",
+        expected_state="AI_ACTIVE",
+        author_type="assistant",
+        content="This reply must not be persisted after takeover.",
+        created_at=datetime.now(),
+    )
+
+    assert blocked is None
+    restored = repository.get("conv_1001")
+    assert restored is not None
+    assert restored.messages == ()
