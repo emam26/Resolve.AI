@@ -1,19 +1,24 @@
-# ResolveAI customer widget
+# ResolveAI local frontend
 
-This is the synthetic M1 customer widget. It starts a server-established `Demo Customer` session, opens a widget conversation for an optional order ID, and appends customer messages using the M1 HTTP/JSON contract in `docs/CONTRACTS.md`.
+This directory contains the React/TypeScript/Vite frontend for the synthetic ResolveAI customer widget, support inbox, and refund-approval console. It talks to the FastAPI service through the JSON API; authorization and workflow state remain server-controlled.
 
-The API base is injected with `VITE_API_BASE_URL`. If it is omitted, requests use the same origin:
+## Local development
 
-```powershell
-npm install
-npm run dev
-```
-
-For a separate local API, set the variable before starting Vite, for example:
+Install the locked dependencies and start Vite:
 
 ```powershell
-$env:VITE_API_BASE_URL = "http://localhost:8000"
-npm run dev
+npm ci
+$env:VITE_API_BASE_URL = "http://127.0.0.1:8000"
+npm run dev -- --host 127.0.0.1 --port 5173
 ```
 
-M1 intentionally renders the server-returned customer transcript and an explicit “no AI answer is available yet” state. It does not invent assistant responses or perform client-side authorization.
+The Vite development server proxies `/api` to `http://127.0.0.1:8000` by default, so `VITE_API_BASE_URL` can be omitted for the documented two-process setup. Set it when the API uses a different address. See the repository [README](../README.md) for backend setup, synthetic workflow steps, and limitations.
+
+## Checks
+
+```powershell
+npm run typecheck
+npm run build
+```
+
+The UI uses explicitly labelled demo identities and synthetic records. It does not connect to a live customer, commerce, payment, or model provider.

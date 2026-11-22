@@ -21,13 +21,13 @@ ResolveAI addresses that workflow with:
 | Capability | Current implementation | Verification status |
 | --- | --- | --- |
 | Customer widget | React/TypeScript/Vite UI with demo customer login, order selection, transcript, and human-handoff control | Local API and frontend checks pass |
-| Staff console | Support inbox, claim/reply/resolve controls, and refund-approver view | Local API and frontend checks pass |
+| Staff console | Support inbox, claim/reply/resolve controls, support-side refund-review request form, and refund-approver view | Local API and frontend checks pass |
 | Identity and authorization | Server-issued synthetic sessions, role checks, and customer order ownership checks | Covered by backend tests |
 | Conversations | SQLAlchemy-backed conversation and message persistence; SQLite is the default local database | SQLite and disposable PostgreSQL runtime exercised locally; no production database |
 | Policy answering | Deterministic lexical retrieval over a small versioned policy corpus with published/visibility filtering and citations | Offline baseline verified |
 | Semantic retrieval | Sentence-transformers adapter, deterministic cosine retriever, pgvector retriever, publication-safe query, migration, and seed helper | Real 384-dimensional local embeddings seeded into pgvector; customer API and browser path verified locally |
 | Investigation workflow | Bounded LangGraph workflow with typed order-facts and injected policy retrieval | Deterministic local workflow and customer API path verified; no live model SDK |
-| Refund review | Backend API supports support-created pending requests, idempotency, separate approver decisions, and an external-action-required terminal state; the current console exposes approver review | Local synthetic flow verified; no payment operation |
+| Refund review | Backend API and staff console support pending requests, stable idempotency, separate approver decisions, and an external-action-required terminal state | Local synthetic flow verified; no payment operation |
 
 ## Customer-to-resolution workflow
 
@@ -37,7 +37,7 @@ The main supported path is:
 2. The customer opens a widget conversation, optionally associated with seeded order `order_1001`, and sends a message. The API runs the bounded investigation workflow: authorized order questions use typed order facts, while policy questions use the configured semantic retriever or the deterministic lexical fallback.
 3. A grounded response includes only published, audience-visible policy evidence. Irrelevant, unsupported, refund, and unavailable-tool cases return a safe handoff result without an invented answer. The customer can then request human support, moving the conversation from `AI_ACTIVE` to `HANDOFF_QUEUED`.
 4. A synthetic support agent signs in as `support_001`, claims the queued case, and replies as a human. The state becomes `HUMAN_ACTIVE`, which blocks autonomous replies.
-5. While the case is human-active, the support agent can create a synthetic refund review through the backend API, subject to the local eligibility rules and a 5,000-cent limit. The current console provides the separate approver review view rather than support-side request creation.
+5. While the case is human-active, the support agent can prepare a synthetic refund review in the staff console, subject to the local eligibility rules and a 5,000-cent limit.
 6. A separate `refund_approver_001` actor can approve or reject the request. Approval produces `APPROVED_EXTERNAL_ACTION_REQUIRED`; it never moves money and never records `REFUNDED`.
 7. After the human work is complete, the support agent can resolve the conversation, moving it from `HUMAN_ACTIVE` to `RESOLVED`.
 
@@ -181,7 +181,7 @@ npm run typecheck
 npm run build
 ```
 
-The same backend and frontend checks are defined in [`.github/workflows/ci.yml`](.github/workflows/ci.yml). The current local verification passed 75 backend tests, including 11 PostgreSQL integration tests, with no skips while the disposable database was running. Frontend typecheck and the production build also pass. The M8 comparison below uses a frozen 15-case set and reports retrieval and answer-contract results separately.
+The same backend and frontend checks are defined in [`.github/workflows/ci.yml`](.github/workflows/ci.yml). The M10 local verification reruns the backend regression suite and the focused PostgreSQL/pgvector integration suite against a disposable database; exact counts are recorded in [`docs/PROJECT_STATE.md`](docs/PROJECT_STATE.md). Frontend typecheck and the production build are also required. CI currently covers deterministic backend tests and frontend compilation/build; the disposable PostgreSQL and browser checks remain explicit local release gates. The M8 comparison below uses a frozen 15-case set and reports retrieval and answer-contract results separately.
 
 ### PostgreSQL policy index (optional)
 
