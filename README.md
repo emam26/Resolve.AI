@@ -127,6 +127,7 @@ The application has no required secrets or live-provider credentials. These opti
 | `RESOLVEAI_CORS_ORIGINS` | `http://localhost:5173,http://127.0.0.1:5173` | Comma-separated browser origins allowed by the API |
 | `RESOLVEAI_POLICY_RETRIEVAL` | `lexical` | Set to `semantic` to use the PostgreSQL/pgvector retriever when the database URL is PostgreSQL |
 | `RESOLVEAI_SENTENCE_TRANSFORMER_MODEL` | `sentence-transformers/all-MiniLM-L6-v2` | Local sentence-transformers model name; model loading remains local-files-only |
+| `RESOLVEAI_COMMERCE_DATABASE_URL` | unset | Explicit PostgreSQL URL for the optional M11A read-only imported-commerce repository; unset retains in-memory order fixtures |
 | `VITE_API_BASE_URL` | empty, same-origin requests | API base URL used by the Vite frontend |
 
 For a local two-process run, a file-backed SQLite database is convenient:
@@ -198,6 +199,17 @@ Pop-Location
 
 The migration, idempotent real-embedding seed command, and frozen five-case semantic evaluation were verified locally against PostgreSQL 16/pgvector. The evaluation command is read-only and requires the configured model to already be cached; it does not download models. The default CI tests use deterministic embeddings. Production database provisioning, extension permissions, and live service operations remain outside this repository’s verification scope.
 
+### Optional synthetic commerce dataset
+
+M11A adds a reproducible, read-only operational-data foundation from a verified
+synthetic ecommerce source. Imported order IDs use `commerce_order_<source-id>`
+and are available through the normal authorized customer API only when
+`RESOLVEAI_COMMERCE_DATABASE_URL` is set. Existing `order_1001` fixtures remain
+the default local path. See [`docs/DATASET.md`](docs/DATASET.md) for the official
+source checksum, isolated import procedure, mappings, deterministic scenarios,
+and integration-test inputs. The source archive and staging database are not
+part of this repository.
+
 ### Retrieval comparison (M8)
 
 After migration and seeding, run the reproducible three-way benchmark from the repository root:
@@ -227,7 +239,7 @@ Refund approval is intentionally a human-controlled workflow:
 - idempotency and the local amount limit prevent duplicate or oversized requests; and
 - approval records an external follow-up requirement rather than executing a payment.
 
-No Shopify or other commerce integration, real customer data, payment provider, or paid API call is included.
+No Shopify or other production commerce integration, real customer data, payment provider, or paid API call is included. The optional M11A commerce import is a local synthetic dataset only.
 
 ## Roadmap
 

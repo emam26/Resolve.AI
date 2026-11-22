@@ -12,5 +12,6 @@
 | Reuse-first task lookup via `docs/PROJECT_STATE.md` | Prevent redo after new agent conversations, save tokens | Frozen |
 | Offline mocked tests default, user runs paid external calls | Avoid accidental runtime API costs | Frozen |
 | Inject policy retrieval through the existing LangGraph answer node; report retrieval mode and fall back to lexical on backend failure | Preserve one controlled workflow, keep deterministic local operation, and avoid presenting degraded retrieval as semantic success | M6 |
+| Import the verified synthetic ecommerce subset into namespaced `commerce_*` tables through a narrow read-only repository | Keeps the publisher DDL out of ResolveAI, preserves existing fixtures/persistence, avoids a second permanent database, and prevents public-ID collisions | M11A |
 
 Do not record every implementation detail here; use Git commits/tests and `docs/PROJECT_STATE.md` for routine progress. A new decision entry requires the problem, chosen option, and rationale.

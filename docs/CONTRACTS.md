@@ -288,6 +288,31 @@ Support agents cannot approve their own requests, merchant admin is not
 implicitly an approver, duplicate pending creation is idempotent, and all
 invalid state/role/amount actions return an error rather than a success.
 
+### M11A frozen contract: imported synthetic commerce boundary
+
+M11A adds an optional, read-only `CommerceRepository` behind
+`RESOLVEAI_COMMERCE_DATABASE_URL`. It is not an authentication source and it
+does not change the existing conversation or refund persistence contracts.
+
+- Imported public IDs are `commerce_order_<source-order-id>`, distinct from V1
+  in-memory fixture IDs.
+- `CommerceRepository.order_for_customer(public_order_id, customer_id)` joins
+  the explicit server-side demo identity mapping with the imported order owner.
+  A missing mapping, foreign order, or unknown ID returns no record so the API
+  preserves its `404` existence-hiding behavior.
+- The existing typed order-facts tool and `GET /api/v1/orders/{order_id}` use
+  this boundary when configured, then preserve in-memory fixtures as a
+  fallback. No model-generated SQL or source-schema query is introduced.
+- Imported order totals set the maximum requestable simulated refund amount,
+  still capped by the V1 local review limit. Approval remains
+  `APPROVED_EXTERNAL_ACTION_REQUIRED`, never a payment execution.
+- Customer-facing policy evidence remains independently filtered to published,
+  public policy documents. Imported tickets or staff-only refund-review policy
+  content are not customer evidence.
+- Import completion records include a deterministic hash of the generated
+  cases/messages/events/refunds payload. Changing scenario output cannot be
+  mistaken for an unchanged import solely because aggregate row counts match.
+
 ### M2 frozen contract: published policy evidence and grounded answer
 
 M2 introduces an internal, deterministic policy service contract. It is not a public route yet and must not call a paid model or expose draft/internal evidence to customers.
