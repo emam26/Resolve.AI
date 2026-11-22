@@ -1,6 +1,6 @@
 # ResolveAI - one living milestone / reuse index
 
-**Last verified by:** ResolveAI Lead (local source/tests/Git). **Date:** 2026-11-21. This file is an *index*, not evidence by itself. On opening the project, compare it with actual Git/source/test state; correct discrepancies. Do not mark work completed without inspecting and/or executing checks.
+**Last verified by:** ResolveAI Lead (local source/tests/Git). **Date:** 2026-11-22. This file is an *index*, not evidence by itself. On opening the project, compare it with actual Git/source/test state; correct discrepancies. Do not mark work completed without inspecting and/or executing checks.
 
 ## Current workspace (Lead-verified)
 - Root guidance, product docs, prompt templates, local skills, design references, and the existing `scripts/notify.ps1` are present.
@@ -20,6 +20,7 @@
 | M3 | Persistent conversations, human handoff/inbox, AI stop on takeover | COMPLETE (local SQLAlchemy/SQLite verified; PostgreSQL/browser unverified) | `backend/app/db/conversations.py`; `backend/app/services/in_memory.py`; `backend/app/api/app.py`; `backend/tests/backend/test_m3_support.py`; `frontend/src/api.ts`; `frontend/src/App.tsx`; `frontend/src/styles.css`; 10 focused backend tests and full suite passed |
 | M4 | Refund review state/authorization + approval UI | COMPLETE (local simulated review verified; no payment provider) | `backend/app/db/refunds.py`; `backend/app/services/in_memory.py`; `backend/app/api/app.py`; `backend/tests/backend/test_m4_refunds.py`; `frontend/src/api.ts`; `frontend/src/App.tsx`; `frontend/src/styles.css`; 15 focused backend tests and full suite passed |
 | M5 | Full E2E verification, local Docker, GitHub CI, portfolio demo | COMPLETE (local synthetic/CI checks; Docker/PostgreSQL/browser unverified) | `backend/tests/test_v1_integration.py`; `.github/workflows/ci.yml`; integration test 1 passed; full backend suite 46 passed; frontend typecheck/build passed; no live services |
+| M6 | Semantic policy retrieval through the customer investigation workflow | LOCAL IMPLEMENTATION VERIFIED; PostgreSQL runtime BLOCKED | `backend/app/ai/answer.py`; `backend/app/ai/investigation.py`; `backend/app/services/in_memory.py`; `backend/app/rag/pgvector_store.py`; `backend/migrations/`; `backend/app/rag/seed.py`; M6 API/RAG tests; 57 backend tests passed and 5 opt-in PG tests skipped; no Docker/psql/PostgreSQL service available |
 
 ## Reusable implementation / test index
 Update this small table **only when real code/tests exist**. This is the anti-duplication lookup before adding a new function or feature.
@@ -31,11 +32,11 @@ Update this small table **only when real code/tests exist**. This is the anti-du
 | Widget conversation | `frontend/src/api.ts`; `frontend/src/App.tsx`; `backend/app/api/app.py` | `npm run typecheck`; `npm run build`; backend conversation tests | Deterministic M1 transcript; no AI answer yet |
 | Policy retrieval | `backend/app/rag/corpus.py`; `backend/app/rag/retrieval.py`; `backend/app/rag/evaluation.py` | `backend/tests/rag/**`; `python -m pytest -q` | Offline lexical baseline with published/public filtering |
 | Grounded policy answer | `backend/app/ai/answer.py` | `backend/tests/ai/**`; `python -m pytest -q` | Deterministic answer templates and weak-match handoff |
-| Semantic embeddings / pgvector | `backend/app/rag/semantic.py`; `backend/app/rag/pgvector_store.py`; `backend/requirements.txt` | `backend/tests/rag/test_semantic.py`; `\.venv\Scripts\python.exe -m pytest -q backend\tests\rag` | Offline adapter, deterministic in-memory retrieval and parameterized PostgreSQL/pgvector query builder implemented; live PostgreSQL/model loading not verified |
+| Semantic embeddings / pgvector | `backend/app/rag/semantic.py`; `backend/app/rag/pgvector_store.py`; `backend/app/rag/seed.py`; `backend/migrations/`; `backend/requirements.txt` | `backend/tests/rag/test_semantic.py`; `backend/tests/rag/test_pgvector_integration.py`; `\.venv\Scripts\python.exe -m pytest -q backend\tests\rag` | In-memory and PostgreSQL retrievers enforce published/audience filters; idempotent migration/seed support and deterministic integration tests exist; actual PostgreSQL/model loading not verified |
 | PostgreSQL FTS comparison | - | - | Not implemented or verified |
-| LangGraph workflow | `backend/app/ai/investigation.py`; `backend/requirements.txt` | `backend/tests/ai/test_investigation.py`; `\.venv\Scripts\python.exe -m pytest -q backend\tests\ai` | Finite controlled workflow with injected mocked model and typed order-facts tool; no live model SDK or external calls |
+| LangGraph workflow | `backend/app/ai/investigation.py`; `backend/app/services/in_memory.py`; `backend/app/api/app.py`; `backend/requirements.txt` | `backend/tests/ai/test_investigation.py`; `backend/tests/backend/test_m6_investigation.py`; `\.venv\Scripts\python.exe -m pytest -q backend\tests\ai backend\tests\backend\test_m6_investigation.py` | Finite controlled workflow is used by the customer message route with injected policy retrieval, typed order-facts, safe lexical fallback and retrieval-mode reporting; no live model SDK or external calls |
 | Live model SDK integration | - | - | Not implemented or verified; requires future owner-approved credentialed evaluation |
-| Persistent conversations / human takeover | `backend/app/db/conversations.py`; `backend/app/services/in_memory.py`; `backend/app/api/app.py` | `backend/tests/backend/test_m3_support.py`; `\.venv\Scripts\python.exe -m pytest -q backend\tests\backend` | SQLAlchemy-backed local persistence, handoff/claim/reply/resolve transitions, server role/ownership checks, no assistant reply in human state |
+| Persistent conversations / human takeover | `backend/app/db/conversations.py`; `backend/app/services/in_memory.py`; `backend/app/api/app.py` | `backend/tests/backend/test_m3_support.py`; `backend/tests/backend/test_m6_investigation.py`; `\.venv\Scripts\python.exe -m pytest -q backend\tests\backend` | SQLAlchemy-backed local persistence, handoff/claim/reply/resolve transitions, server role/ownership checks, and conditional assistant append that refuses replies after takeover |
 | Staff inbox UI | `frontend/src/api.ts`; `frontend/src/App.tsx`; `frontend/src/styles.css` | `npm.cmd run typecheck`; `npm.cmd run build` | Local demo support login, queue, claim, human reply and resolve controls |
 | Refund review | `backend/app/db/refunds.py`; `backend/app/services/in_memory.py`; `backend/app/api/app.py`; `frontend/src/api.ts`; `frontend/src/App.tsx`; `frontend/src/styles.css` | `backend/tests/backend/test_m4_refunds.py`; `\.venv\Scripts\python.exe -m pytest -q backend\tests\backend`; `npm.cmd run typecheck`; `npm.cmd run build` | Support request, 5,000-cent synthetic limit, idempotency, separate approver decisions, terminal external-action-required/rejected states; no payment operation |
 
@@ -50,10 +51,14 @@ Update this small table **only when real code/tests exist**. This is the anti-du
 - `\.venv\Scripts\python.exe -m pytest -q` - 45 tests passed after M4; `pip check` reported no broken requirements.
 - `\.venv\Scripts\python.exe -m pytest -q backend\tests\test_v1_integration.py` - 1 synthetic cross-feature V1 flow passed.
 - `\.venv\Scripts\python.exe -m pytest -q` - 46 tests passed after M5 integration coverage; `pip check` reported no broken requirements.
+- `\.venv\Scripts\python.exe -m pytest -q backend\tests` - 57 tests passed and 5 opt-in PostgreSQL tests skipped because `RESOLVEAI_TEST_POSTGRES_URL` was not configured.
+- `\.venv\Scripts\python.exe -m pytest -q backend\tests\ai backend\tests\backend\test_m6_investigation.py backend\tests\rag\test_semantic.py backend\tests\rag\test_pgvector_integration.py` - 27 tests passed and 5 PostgreSQL tests skipped after M6 integration/fallback/security fixes.
+- `..\.venv\Scripts\python.exe -m alembic -c alembic.ini upgrade head --sql` from `backend/` - PostgreSQL migration SQL rendered successfully; no live database was contacted.
 - `npm.cmd run typecheck` in `frontend/` - passed after M3 staff inbox and customer handoff controls.
 - `npm.cmd run build` in `frontend/` - passed after M3 staff inbox and customer handoff controls.
 - `.github/workflows/ci.yml` - added local-only backend/frontend CI commands; workflow execution in GitHub is not claimed here.
 - `\.venv\Scripts\python.exe -m compileall -q backend` - passed.
+- Independent M6 read-only review - no actionable findings after fixes; conditional takeover guard and backend/seed command were rechecked.
 - `npm install` in `frontend/` - 69 packages installed; audit reported 0 vulnerabilities.
 - `npm run typecheck` in `frontend/` - passed.
 - `npm run build` in `frontend/` - passed.
@@ -64,14 +69,14 @@ Update this small table **only when real code/tests exist**. This is the anti-du
 ## Current blockers / manual actions
 - M2 is specifically the completed offline lexical baseline; it does not claim semantic RAG. M2S adds the semantic/pgvector implementation and deterministic tests, but actual sentence-transformers model loading, PostgreSQL execution/migrations, and PostgreSQL full-text comparison remain unverified or outstanding. No paid or live model call is authorized.
 - LangGraph’s controlled mocked workflow is implemented in M2L. Live model SDK integration remains outstanding and requires future owner-approved credentials/evaluation; no paid or live model call is authorized in local development.
-- Docker is unavailable, so PostgreSQL-backed persistence and production-like integration are not yet verifiable.
+- Docker is not installed (`docker` is not a recognized command), no `psql` client or PostgreSQL Windows service was found, and `RESOLVEAI_TEST_POSTGRES_URL` is unset. Therefore PostgreSQL/pgvector execution, migration application, seed execution, and the five real-database tests are not verified.
 - No browser/manual widget flow was run; local API and frontend builds are verified independently.
 - M3/M4 PostgreSQL execution/migrations and browser/manual flow remain unverified; the local SQLAlchemy tests use SQLite.
 - Lead milestone `done` voice attempts for M2S, M2L, M3, M4, and M5 were nonblocking but failed because the existing notifier could not write its deduplication stamp under the environment's local voice-history path; the notifier test itself previously returned `VOICE_OK`.
 - Existing FastAPI TestClient emits a Starlette/HTTPX deprecation warning; tests still pass. Revisit when the dependency guidance stabilizes.
 
 ## Next bounded milestone
-No further local V1 coding milestone is authorized or required. Human/environment follow-up is limited to running Docker/PostgreSQL migrations, a browser/manual flow, and any owner-approved live model evaluation; none is claimed complete here.
+M6 local implementation is verified but cannot be marked fully complete until a real PostgreSQL instance with pgvector is provided. The next highest-value action is to run the migration, synthetic seed command, and opt-in integration tests against a disposable PostgreSQL/pgvector database, then separately run the local-files-only sentence-transformers smoke test if the model is already cached. No paid/live model call is authorized.
 
 ## Update policy
 After each **completed milestone**, the lead changes status, lists exact implementation/tests reused by next workers, records the test commands and results, the one next action, and any blocker. Do not rewrite this file after every keystroke. Investigate rather than repeat allegedly completed work when code and state differ.

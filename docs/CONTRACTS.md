@@ -234,6 +234,7 @@ Success `200 OK`:
 - `state` is initially `AI_ACTIVE`; later state transitions remain server-controlled.
 - `author_type` is `customer` for M1-created messages; no client-supplied author is accepted.
 - `assistant_reply`, `evidence`, and `handoff_reason` are explicit M1 response fields and remain empty/null until a later approved capability supplies them.
+- M6 adds `retrieval_mode` to the append response. It is one of `not_applicable`, `lexical`, `semantic`, or `lexical_fallback`, so a lexical degradation is not presented as a semantic success.
 - A customer may read and append only to conversations established for that customer session.
 
 ### M3 frozen contract: handoff, support inbox and human takeover
