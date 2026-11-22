@@ -6,13 +6,15 @@ import math
 from typing import Sequence
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import Integer, String, Text, select
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy import Integer, String, Text, UniqueConstraint, create_engine, select, text
+from sqlalchemy.engine import Engine
+from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
-from .models import PolicyAudience, PolicyEvidence
+from .models import PolicyAudience, PolicyEvidence, PolicyRecord
 from .semantic import (
     DEFAULT_EMBEDDING_DIMENSIONS,
     DEFAULT_SEMANTIC_MINIMUM_SCORE,
+    EmbeddingProvider,
     SUPPORTED_AUDIENCES,
 )
 
@@ -30,6 +32,15 @@ class PolicyEmbeddingRow(Base):
     """
 
     __tablename__ = "policy_embeddings"
+    __table_args__ = (
+        UniqueConstraint(
+            "document_id",
+            "document_version",
+            "section",
+            "release_id",
+            name="uq_policy_embedding_revision",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     document_id: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -42,6 +53,111 @@ class PolicyEmbeddingRow(Base):
     embedding: Mapped[list[float]] = mapped_column(
         Vector(DEFAULT_EMBEDDING_DIMENSIONS), nullable=False
     )
+
+
+class PgVectorPolicyRetriever:
+    """Query the published policy embedding table through the shared contract."""
+
+    def __init__(
+        self,
+        database_url: str,
+        embedding_provider: EmbeddingProvider,
+        *,
+        minimum_score: float = DEFAULT_SEMANTIC_MINIMUM_SCORE,
+    ) -> None:
+        if not database_url.startswith(("postgresql", "postgres")):
+            raise ValueError("PgVectorPolicyRetriever requires a PostgreSQL URL")
+        self._engine = create_engine(database_url, future=True)
+        self._session_factory = sessionmaker(self._engine, expire_on_commit=False)
+        self._embedding_provider = embedding_provider
+        self._minimum_score = minimum_score
+
+    def retrieve_published_policy(
+        self,
+        query: str,
+        audience: PolicyAudience = "customer",
+        top_k: int = 3,
+    ) -> list[PolicyEvidence]:
+        if not query.strip():
+            return []
+        query_vectors = self._embedding_provider.embed([query])
+        if len(query_vectors) != 1:
+            raise ValueError("embedding provider must return one query vector")
+        query_embedding = tuple(float(value) for value in query_vectors[0])
+        statement = build_pgvector_policy_query(
+            query_embedding,
+            audience=audience,
+            top_k=top_k,
+            minimum_score=self._minimum_score,
+        )
+        with self._session_factory() as session:
+            rows = session.execute(statement).all()
+        return [
+            policy_evidence_from_row(
+                row,
+                cosine_distance=float(distance),
+                minimum_score=self._minimum_score,
+            )
+            for row, distance in rows
+        ]
+
+
+def create_pgvector_schema(engine: Engine) -> None:
+    """Create the extension and table for a provisioned PostgreSQL database."""
+
+    with engine.begin() as connection:
+        connection.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+    Base.metadata.create_all(engine)
+
+
+def seed_policy_embeddings(
+    engine: Engine,
+    records: Sequence[PolicyRecord],
+    embedding_provider: EmbeddingProvider,
+) -> None:
+    """Upsert synthetic policy embeddings using a caller-supplied local embedder."""
+
+    create_pgvector_schema(engine)
+    vectors = embedding_provider.embed(
+        [f"{record.section}\n{record.text}" for record in records]
+    )
+    if len(vectors) != len(records):
+        raise ValueError("embedding provider returned an unexpected number of vectors")
+    with Session(engine) as session:
+        for record, vector in zip(records, vectors):
+            values = tuple(float(value) for value in vector)
+            if len(values) != DEFAULT_EMBEDDING_DIMENSIONS:
+                raise ValueError(
+                    "policy embedding must have "
+                    f"{DEFAULT_EMBEDDING_DIMENSIONS} dimensions"
+                )
+            existing = session.scalar(
+                select(PolicyEmbeddingRow).where(
+                    PolicyEmbeddingRow.document_id == record.document_id,
+                    PolicyEmbeddingRow.document_version == record.document_version,
+                    PolicyEmbeddingRow.section == record.section,
+                    PolicyEmbeddingRow.release_id == record.release_id,
+                )
+            )
+            if existing is None:
+                session.add(
+                    PolicyEmbeddingRow(
+                        document_id=record.document_id,
+                        document_version=record.document_version,
+                        section=record.section,
+                        release_id=record.release_id,
+                        status=record.status,
+                        visibility=record.visibility,
+                        text=record.text,
+                        embedding=list(values),
+                    )
+                )
+            else:
+                existing.status = record.status
+                existing.visibility = record.visibility
+                existing.text = record.text
+                existing.embedding = list(values)
+        session.commit()
 
 
 def build_pgvector_policy_query(
@@ -110,6 +226,7 @@ def policy_evidence_from_row(
         visibility=row.visibility,  # type: ignore[arg-type]
         score=score,
         text=row.text,
+        status=row.status,  # type: ignore[arg-type]
     )
 
 
@@ -140,7 +257,10 @@ def _validate_query_inputs(
 
 __all__ = [
     "Base",
+    "PgVectorPolicyRetriever",
     "PolicyEmbeddingRow",
     "build_pgvector_policy_query",
+    "create_pgvector_schema",
     "policy_evidence_from_row",
+    "seed_policy_embeddings",
 ]
