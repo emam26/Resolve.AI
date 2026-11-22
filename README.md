@@ -27,6 +27,7 @@ ResolveAI addresses that workflow with:
 | Policy answering | Deterministic lexical retrieval over a small versioned policy corpus with published/visibility filtering and citations | Offline baseline verified |
 | Semantic retrieval | Sentence-transformers adapter, deterministic cosine retriever, pgvector retriever, publication-safe query, migration, and seed helper | Real 384-dimensional local embeddings seeded into pgvector; customer API and browser path verified locally |
 | Investigation workflow | Bounded LangGraph workflow with typed order-facts and injected policy retrieval | Deterministic local workflow and customer API path verified; no live model SDK |
+| Optional local answer model | Local-only Transformers adapter behind the existing validated `PolicyAnswerProvider` boundary | Disabled by default; adapter contract tested, but no cached generative model smoke test yet |
 | Refund review | Backend API and staff console support pending requests, stable idempotency, separate approver decisions, and an external-action-required terminal state | Local synthetic flow verified; no payment operation |
 
 ## Customer-to-resolution workflow
@@ -127,6 +128,8 @@ The application has no required secrets or live-provider credentials. These opti
 | `RESOLVEAI_CORS_ORIGINS` | `http://localhost:5173,http://127.0.0.1:5173` | Comma-separated browser origins allowed by the API |
 | `RESOLVEAI_POLICY_RETRIEVAL` | `lexical` | Set to `semantic` to use the PostgreSQL/pgvector retriever when the database URL is PostgreSQL |
 | `RESOLVEAI_SENTENCE_TRANSFORMER_MODEL` | `sentence-transformers/all-MiniLM-L6-v2` | Local sentence-transformers model name; model loading remains local-files-only |
+| `RESOLVEAI_LOCAL_POLICY_MODEL` | unset | Optional local path or cached Transformers model for policy-answer formulation; unset preserves deterministic generation |
+| `RESOLVEAI_LOCAL_POLICY_TIMEOUT_SECONDS` | `8` | Maximum time for one local model response before deterministic fallback; the provider remains closed after a timeout |
 | `RESOLVEAI_COMMERCE_DATABASE_URL` | unset | Explicit PostgreSQL URL for the optional M11A read-only imported-commerce repository; unset retains in-memory order fixtures |
 | `VITE_API_BASE_URL` | empty, same-origin requests | API base URL used by the Vite frontend |
 
@@ -136,6 +139,19 @@ For a local two-process run, a file-backed SQLite database is convenient:
 $env:RESOLVEAI_DATABASE_URL = "sqlite+pysqlite:///./resolveai.db"
 $env:RESOLVEAI_CORS_ORIGINS = "http://localhost:5173,http://127.0.0.1:5173"
 ```
+
+#### Optional local response model
+
+The default remains deterministic policy-answer formulation. To evaluate a
+compatible **already-cached** Transformers causal or sequence-to-sequence model,
+set `RESOLVEAI_LOCAL_POLICY_MODEL` to its local directory before starting the
+API. The adapter uses `local_files_only=True`: it does not download weights,
+call a hosted API, access the database, or execute tools. It receives only
+server-authorized policy evidence and must emit one JSON response that passes
+the existing citation and extractive-grounding validation; otherwise ResolveAI
+falls back to the deterministic answer. No generative model weights are
+bundled with this repository, and a real local-model smoke test is not yet
+claimed.
 
 ### Run the API and frontend
 
@@ -197,7 +213,7 @@ Pop-Location
 .\.venv\Scripts\python.exe -m backend.app.rag.semantic_eval
 ```
 
-The migration, idempotent real-embedding seed command, and frozen five-case semantic evaluation were verified locally against PostgreSQL 16/pgvector. The evaluation command is read-only and requires the configured model to already be cached; it does not download models. The default CI tests use deterministic embeddings. Production database provisioning, extension permissions, and live service operations remain outside this repository’s verification scope.
+The migration, idempotent real-embedding seed command, and frozen semantic evaluation were verified locally against PostgreSQL 16/pgvector. The evaluator reports raw retrieval separately from the customer-facing grounded-answer contract, so a ranked document is not treated as a usable answer unless it clears the existing evidence controls. The command is read-only and requires the configured model to already be cached; it does not download models. The default CI tests use deterministic embeddings. Production database provisioning, extension permissions, and live service operations remain outside this repository’s verification scope.
 
 ### Optional synthetic commerce dataset
 
