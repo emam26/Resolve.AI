@@ -22,3 +22,10 @@ Thumbs.db
 # Internal Codex workflow materials (keep locally, do not publish)
 /prompts/
 /references/
+# Local overnight agent/automation artifacts (keep out of public Git)
+/.codex/
+/automation/
+/scripts/run-autonomy.py
+/scripts/tests/
+/REVIEW_AND_CHANGES_v1_1.md
+/REVIEW_AND_CHANGES_v1_2.md
