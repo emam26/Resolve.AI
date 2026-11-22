@@ -68,15 +68,15 @@ def _repository_with_imported_order() -> CommerceRepository:
             commerce_customers.insert(),
             [
                 {
-                    "source_user_id": 3398,
-                    "public_customer_id": "commerce_customer_3398",
+                    "source_user_id": 7001,
+                    "public_customer_id": "fixture_customer_7001",
                     "email": "mapped@example.test",
                     "display_name": "Mapped Customer",
                     "created_at": datetime(2025, 12, 31),
                 },
                 {
-                    "source_user_id": 4995,
-                    "public_customer_id": "commerce_customer_4995",
+                    "source_user_id": 7002,
+                    "public_customer_id": "fixture_customer_7002",
                     "email": "foreign@example.test",
                     "display_name": "Foreign Customer",
                     "created_at": datetime(2025, 12, 30),
@@ -87,8 +87,8 @@ def _repository_with_imported_order() -> CommerceRepository:
             commerce_addresses.insert(),
             [
                 {
-                    "source_address_id": 1,
-                    "source_user_id": 3398,
+                    "source_address_id": 8001,
+                    "source_user_id": 7001,
                     "street_address": "1 Sample Street",
                     "extended_address": None,
                     "city": "Example City",
@@ -99,8 +99,8 @@ def _repository_with_imported_order() -> CommerceRepository:
                     "is_default_shipping": True,
                 },
                 {
-                    "source_address_id": 2,
-                    "source_user_id": 4995,
+                    "source_address_id": 8002,
+                    "source_user_id": 7002,
                     "street_address": "2 Sample Street",
                     "extended_address": None,
                     "city": "Example City",
@@ -128,11 +128,11 @@ def _repository_with_imported_order() -> CommerceRepository:
             commerce_orders.insert(),
             [
                 {
-                    "source_order_id": 92,
-                    "public_order_id": "commerce_order_92",
-                    "source_user_id": 3398,
-                    "source_billing_address_id": 1,
-                    "source_shipping_address_id": 1,
+                    "source_order_id": 70001,
+                    "public_order_id": "fixture_order_70001",
+                    "source_user_id": 7001,
+                    "source_billing_address_id": 8001,
+                    "source_shipping_address_id": 8001,
                     "source_order_status_id": 1,
                     "source_shipping_method_id": 1,
                     "source_coupon_id": None,
@@ -144,11 +144,11 @@ def _repository_with_imported_order() -> CommerceRepository:
                     "total": Decimal("86.00"),
                 },
                 {
-                    "source_order_id": 1877,
-                    "public_order_id": "commerce_order_1877",
-                    "source_user_id": 4995,
-                    "source_billing_address_id": 2,
-                    "source_shipping_address_id": 2,
+                    "source_order_id": 70002,
+                    "public_order_id": "fixture_order_70002",
+                    "source_user_id": 7002,
+                    "source_billing_address_id": 8002,
+                    "source_shipping_address_id": 8002,
                     "source_order_status_id": 1,
                     "source_shipping_method_id": 1,
                     "source_coupon_id": None,
@@ -164,8 +164,8 @@ def _repository_with_imported_order() -> CommerceRepository:
         connection.execute(
             commerce_payments.insert(),
             [{
-                "source_payment_id": 1,
-                "source_order_id": 92,
+                "source_payment_id": 9001,
+                "source_order_id": 70001,
                 "source_payment_method_id": 1,
                 "amount": Decimal("86.00"),
                 "status": "completed",
@@ -176,8 +176,8 @@ def _repository_with_imported_order() -> CommerceRepository:
         connection.execute(
             commerce_shipments.insert(),
             [{
-                "source_shipment_id": 1,
-                "source_order_id": 92,
+                "source_shipment_id": 9101,
+                "source_order_id": 70001,
                 "tracking_number": "sample-tracking-1",
                 "shipped_at": datetime(2026, 1, 2),
                 "promised_delivery_at": datetime(2026, 1, 8),
@@ -186,14 +186,14 @@ def _repository_with_imported_order() -> CommerceRepository:
         )
         connection.execute(
             commerce_demo_identities.insert(),
-            [{"actor_id": "customer_001", "source_user_id": 3398}],
+            [{"actor_id": "customer_001", "source_user_id": 7001}],
         )
         connection.execute(
             commerce_support_cases.insert(),
             [{
                 "case_id": "case-delayed-delivery-001",
-                "source_user_id": 3398,
-                "source_order_id": 92,
+                "source_user_id": 7001,
+                "source_order_id": 70001,
                 "scenario_type": "delayed_delivery",
                 "status": "HANDOFF_QUEUED",
                 "permitted_outcome": "HUMAN_ESCALATION",
@@ -214,14 +214,14 @@ def _login(client: TestClient, actor_id: str) -> str:
 def test_repository_maps_only_authorized_imported_orders() -> None:
     repository = _repository_with_imported_order()
 
-    owned = repository.order_for_customer("commerce_order_92", "customer_001")
+    owned = repository.order_for_customer("fixture_order_70001", "customer_001")
 
     assert owned is not None
     assert owned.summary.status == "delayed"
     assert owned.summary.payment_status == "paid"
     assert owned.summary.shipment_status == "delayed"
     assert owned.max_refundable_cents == 8600
-    assert repository.order_for_customer("commerce_order_1877", "customer_001") is None
+    assert repository.order_for_customer("fixture_order_70002", "customer_001") is None
 
 
 def test_existing_api_workflow_uses_imported_order_without_weakening_refund_guards() -> None:
@@ -229,12 +229,12 @@ def test_existing_api_workflow_uses_imported_order_without_weakening_refund_guar
     client = TestClient(create_app(commerce_repository=repository))
     customer_headers = {"Authorization": f"Bearer {_login(client, 'customer_001')}"}
 
-    owned = client.get("/api/v1/orders/commerce_order_92", headers=customer_headers)
-    foreign = client.get("/api/v1/orders/commerce_order_1877", headers=customer_headers)
+    owned = client.get("/api/v1/orders/fixture_order_70001", headers=customer_headers)
+    foreign = client.get("/api/v1/orders/fixture_order_70002", headers=customer_headers)
     conversation = client.post(
         "/api/v1/conversations",
         headers=customer_headers,
-        json={"channel": "widget", "order_id": "commerce_order_92"},
+        json={"channel": "widget", "order_id": "fixture_order_70001"},
     )
 
     assert owned.status_code == 200
@@ -248,7 +248,7 @@ def test_existing_api_workflow_uses_imported_order_without_weakening_refund_guar
         json={"content": "Where is my order?"},
     )
     assert investigation.status_code == 201
-    assert "commerce_order_92 is delayed" in investigation.json()["assistant_reply"]["content"]
+    assert "fixture_order_70001 is delayed" in investigation.json()["assistant_reply"]["content"]
 
     assert client.post(
         f"/api/v1/conversations/{conversation_id}/handoff", headers=customer_headers

@@ -19,6 +19,35 @@ coverage/
 Thumbs.db
 # Local IDE/session output
 *.log
+
+# Raw datasets, imported operational records, exports, snapshots and private
+# evaluation material. Keep these outside the public repository; preserve
+# independently authored unit-test fixtures explicitly when needed.
+/data/
+/datasets/
+/raw/
+/imports/
+/exports/
+/snapshots/
+/db-dumps/
+/private/
+/holdout/
+/holdouts/
+/backend/data/
+/backend/raw/
+/backend/imports/
+/backend/exports/
+/backend/snapshots/
+/backend/db-dumps/
+/backend/private/
+/backend/holdout/
+/backend/holdouts/
+# Compressed SQL and database dump formats are never application fixtures.
+*.sql.gz
+*.dump
+*.backup
+*.bak
+
 # Internal Codex workflow materials (keep locally, do not publish)
 /prompts/
 /references/

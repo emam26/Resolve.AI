@@ -132,6 +132,30 @@ def test_postgres_import_is_consistent_repeatable_and_rollback_safe(monkeypatch)
             ) == 0
         validate_evaluation_cases(target)
 
+        with target.connect() as connection:
+            owned_order_id = connection.execute(
+                text(
+                    "SELECT o.public_order_id "
+                    "FROM commerce_orders o "
+                    "JOIN commerce_demo_identities d "
+                    "ON d.source_user_id = o.source_user_id "
+                    "JOIN commerce_support_cases sc "
+                    "ON sc.source_order_id = o.source_order_id "
+                    "WHERE d.actor_id = :actor_id "
+                    "AND sc.scenario_type = 'delayed_delivery' "
+                    "ORDER BY o.source_order_id LIMIT 1"
+                ),
+                {"actor_id": "customer_001"},
+            ).scalar_one()
+            foreign_order_id = connection.execute(
+                text(
+                    "SELECT public_order_id FROM commerce_orders "
+                    "WHERE public_order_id <> :owned_order_id "
+                    "ORDER BY source_order_id LIMIT 1"
+                ),
+                {"owned_order_id": owned_order_id},
+            ).scalar_one()
+
         # This uses the normal HTTP routes and the migrated PostgreSQL rows,
         # not a direct SQL projection or an in-memory order fixture.
         client = TestClient(
@@ -143,8 +167,8 @@ def test_postgres_import_is_consistent_repeatable_and_rollback_safe(monkeypatch)
         login = client.post("/api/v1/auth/demo-login", json={"demo_actor_id": "customer_001"})
         assert login.status_code == 200
         headers = {"Authorization": f"Bearer {login.json()['session_id']}"}
-        owned = client.get("/api/v1/orders/commerce_order_92", headers=headers)
-        foreign = client.get("/api/v1/orders/commerce_order_1877", headers=headers)
+        owned = client.get(f"/api/v1/orders/{owned_order_id}", headers=headers)
+        foreign = client.get(f"/api/v1/orders/{foreign_order_id}", headers=headers)
         assert owned.status_code == 200
         assert owned.json()["status"] == "delayed"
         assert owned.json()["shipment_status"] == "delayed"
@@ -152,7 +176,7 @@ def test_postgres_import_is_consistent_repeatable_and_rollback_safe(monkeypatch)
         conversation = client.post(
             "/api/v1/conversations",
             headers=headers,
-            json={"channel": "widget", "order_id": "commerce_order_92"},
+            json={"channel": "widget", "order_id": owned_order_id},
         )
         assert conversation.status_code == 201
         investigation = client.post(
@@ -161,7 +185,7 @@ def test_postgres_import_is_consistent_repeatable_and_rollback_safe(monkeypatch)
             json={"content": "Where is my order?"},
         )
         assert investigation.status_code == 201
-        assert "commerce_order_92 is delayed" in investigation.json()["assistant_reply"]["content"]
+        assert f"{owned_order_id} is delayed" in investigation.json()["assistant_reply"]["content"]
 
         # A generated-row change, even with identical aggregate counts, must
         # produce a new manifest and replace the owned dataset rather than
