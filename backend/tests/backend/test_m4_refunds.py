@@ -182,6 +182,36 @@ def test_refund_request_requires_human_active_conversation() -> None:
     assert response.status_code == 409
 
 
+def test_refund_request_cannot_be_created_after_concurrent_resolution(monkeypatch) -> None:
+    client = TestClient(create_app())
+    conversation_id, _, support = _human_active_conversation(client)
+    repository = client.app.state.service._repository
+    refund_repository = client.app.state.service._refund_repository
+    create_refund = refund_repository.create
+
+    def resolve_before_create(*args, **kwargs):
+        transitioned = repository.transition(
+            conversation_id,
+            expected_state="HUMAN_ACTIVE",
+            new_state="RESOLVED",
+        )
+        assert transitioned is not None
+        return create_refund(*args, **kwargs)
+
+    monkeypatch.setattr(refund_repository, "create", resolve_before_create)
+    response = _refund_request(client, conversation_id, support)
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "conversation_state_conflict"
+    approver = _login(client, REFUND_APPROVER_ACTOR_ID)
+    listed = client.get(
+        "/api/v1/refunds",
+        headers={"Authorization": f"Bearer {approver}"},
+    )
+    assert listed.status_code == 200
+    assert listed.json()["refunds"] == []
+
+
 def test_refund_approver_demo_actor_id_matches_server_contract() -> None:
     client = TestClient(create_app())
     valid = client.post(

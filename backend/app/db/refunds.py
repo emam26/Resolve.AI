@@ -6,12 +6,12 @@ from dataclasses import dataclass
 from typing import Final
 from uuid import uuid4
 
-from sqlalchemy import Integer, String, UniqueConstraint, create_engine, select, update
+from sqlalchemy import Integer, String, UniqueConstraint, select, update
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Mapped, mapped_column, sessionmaker
-from sqlalchemy.pool import StaticPool
 
-from .conversations import Base
+from .conversations import Base, ConversationRow, create_database_engine
 
 
 DEFAULT_REFUND_DATABASE_URL: Final = "sqlite+pysqlite:///:memory:"
@@ -56,13 +56,10 @@ class StoredRefund:
 class RefundRepository:
     """Persist review records without any payment-provider behavior."""
 
-    def __init__(self, database_url: str = DEFAULT_REFUND_DATABASE_URL) -> None:
-        engine_kwargs: dict[str, object] = {"future": True}
-        if database_url.startswith("sqlite"):
-            engine_kwargs["connect_args"] = {"check_same_thread": False}
-            if ":memory:" in database_url:
-                engine_kwargs["poolclass"] = StaticPool
-        self._engine = create_engine(database_url, **engine_kwargs)
+    def __init__(
+        self, database_url: str = DEFAULT_REFUND_DATABASE_URL, *, engine: Engine | None = None
+    ) -> None:
+        self._engine = engine or create_database_engine(database_url)
         Base.metadata.create_all(self._engine)
         self._session_factory = sessionmaker(self._engine, expire_on_commit=False)
 
@@ -92,7 +89,7 @@ class RefundRepository:
         reason: str,
         idempotency_key: str,
         requested_by: str,
-    ) -> StoredRefund:
+    ) -> StoredRefund | None:
         row = RefundRow(
             refund_id=f"refund_{uuid4().hex}",
             conversation_id=conversation_id,
@@ -107,6 +104,13 @@ class RefundRepository:
         )
         try:
             with self._session_factory.begin() as session:
+                conversation = session.scalar(
+                    select(ConversationRow)
+                    .where(ConversationRow.conversation_id == conversation_id)
+                    .with_for_update()
+                )
+                if conversation is None or conversation.state != "HUMAN_ACTIVE":
+                    return None
                 session.add(row)
         except IntegrityError:
             existing = self.get_by_idempotency(conversation_id, idempotency_key)

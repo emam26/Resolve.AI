@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from typing import Final
 
 from sqlalchemy import DateTime, Integer, String, create_engine, select, update
+from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -76,6 +77,17 @@ class IdSequenceRow(Base):
     next_value: Mapped[int] = mapped_column(Integer, nullable=False)
 
 
+def create_database_engine(database_url: str) -> Engine:
+    """Create the shared local engine used by conversation and refund stores."""
+
+    engine_kwargs: dict[str, object] = {"future": True}
+    if database_url.startswith("sqlite"):
+        engine_kwargs["connect_args"] = {"check_same_thread": False}
+        if ":memory:" in database_url:
+            engine_kwargs["poolclass"] = StaticPool
+    return create_engine(database_url, **engine_kwargs)
+
+
 def _utc(value: datetime) -> datetime:
     """Return a timezone-aware UTC value for SQLite and PostgreSQL rows."""
 
@@ -87,13 +99,10 @@ def _utc(value: datetime) -> datetime:
 class ConversationRepository:
     """Persist conversations and messages behind a small testable interface."""
 
-    def __init__(self, database_url: str = DEFAULT_DATABASE_URL) -> None:
-        engine_kwargs: dict[str, object] = {"future": True}
-        if database_url.startswith("sqlite"):
-            engine_kwargs["connect_args"] = {"check_same_thread": False}
-            if ":memory:" in database_url:
-                engine_kwargs["poolclass"] = StaticPool
-        self._engine = create_engine(database_url, **engine_kwargs)
+    def __init__(
+        self, database_url: str = DEFAULT_DATABASE_URL, *, engine: Engine | None = None
+    ) -> None:
+        self._engine = engine or create_database_engine(database_url)
         Base.metadata.create_all(self._engine)
         self._session_factory = sessionmaker(self._engine, expire_on_commit=False)
         self._initialize_sequences()

@@ -95,6 +95,51 @@ def test_handoff_inbox_claim_reply_resolve_and_ai_stop() -> None:
     )
 
 
+def test_staff_reply_cannot_append_after_concurrent_resolution(monkeypatch) -> None:
+    client = TestClient(create_app())
+    customer = _login(client, "customer_001")
+    support = _login(client, "support_001")
+    conversation_id = _create_and_handoff(client, customer)
+    support_headers = {"Authorization": f"Bearer {support}"}
+    claimed = client.post(
+        f"/api/v1/support/conversations/{conversation_id}/claim",
+        headers=support_headers,
+    )
+    assert claimed.status_code == 200
+
+    repository = client.app.state.service._repository
+    append_if_active = repository.append_message_if_state
+
+    def resolve_before_append(*args, **kwargs):
+        transitioned = repository.transition(
+            conversation_id,
+            expected_state="HUMAN_ACTIVE",
+            new_state="RESOLVED",
+        )
+        assert transitioned is not None
+        return append_if_active(*args, **kwargs)
+
+    monkeypatch.setattr(repository, "append_message_if_state", resolve_before_append)
+    response = client.post(
+        f"/api/v1/support/conversations/{conversation_id}/messages",
+        headers=support_headers,
+        json={"content": "This reply must not be appended after resolution."},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "conversation_state_conflict"
+    transcript = client.get(
+        f"/api/v1/conversations/{conversation_id}",
+        headers={"Authorization": f"Bearer {customer}"},
+    )
+    assert transcript.status_code == 200
+    assert transcript.json()["state"] == "RESOLVED"
+    assert all(
+        message["content"] != "This reply must not be appended after resolution."
+        for message in transcript.json()["messages"]
+    )
+
+
 def test_conversations_persist_across_app_instances(tmp_path: Path) -> None:
     database_url = f"sqlite+pysqlite:///{tmp_path / 'resolveai.db'}"
     first = TestClient(create_app(database_url=database_url))

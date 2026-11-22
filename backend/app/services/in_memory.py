@@ -28,6 +28,7 @@ from backend.app.contracts import (
     SupportInboxResponse,
 )
 from backend.app.db import ConversationRepository, RefundRepository, StoredConversation, StoredRefund
+from backend.app.db.conversations import create_database_engine
 
 
 class _DemoInvestigationModel:
@@ -129,8 +130,13 @@ class InMemoryResolveService:
         self._response_provider = response_provider
         self._investigation_model = investigation_model or _DemoInvestigationModel()
         configured_database_url = database_url or "sqlite+pysqlite:///:memory:"
-        self._repository = ConversationRepository(configured_database_url)
-        self._refund_repository = RefundRepository(configured_database_url)
+        database_engine = create_database_engine(configured_database_url)
+        self._repository = ConversationRepository(
+            configured_database_url, engine=database_engine
+        )
+        self._refund_repository = RefundRepository(
+            configured_database_url, engine=database_engine
+        )
         self._orders = {
             "order_1001": _OrderRecord(
                 owner_customer_id=DEMO_ACTOR_ID,
@@ -390,14 +396,15 @@ class InMemoryResolveService:
             raise ConversationStateConflict("staff reply requires HUMAN_ACTIVE")
         if record.assigned_staff_id != actor.actor_id:
             raise ForbiddenOperation("conversation is assigned to another support agent")
-        updated = self._repository.append_message(
+        updated = self._repository.append_message_if_state(
             conversation_id,
+            expected_state="HUMAN_ACTIVE",
             author_type="staff",
             content=content,
             created_at=MESSAGE_TIMESTAMP,
         )
         if updated is None:
-            return None
+            raise ConversationStateConflict("staff reply state changed concurrently")
         message = updated.messages[-1]
         return AppendMessageResponse(
             conversation_id=updated.conversation_id,
@@ -478,6 +485,8 @@ class InMemoryResolveService:
             idempotency_key=idempotency_key,
             requested_by=actor.actor_id,
         )
+        if stored is None:
+            raise ConversationStateConflict("refund request state changed concurrently")
         if (
             stored.amount_cents != request.amount_cents
             or stored.reason != reason
