@@ -8,6 +8,7 @@ from .generation import (
     PolicyAnswerPrompt,
     PolicyAnswerProvider,
 )
+from .local_transformers import LocalTransformersPolicyAnswerProvider
 
 __all__ = [
     "AuthorizedPolicyEvidence",
@@ -17,5 +18,6 @@ __all__ = [
     "PolicyAnswerPrompt",
     "PolicyAnswerProvider",
     "PolicyRetriever",
+    "LocalTransformersPolicyAnswerProvider",
     "answer_from_published_policy",
 ]

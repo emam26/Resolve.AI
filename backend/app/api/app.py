@@ -28,6 +28,7 @@ from backend.app.contracts import (
 from backend.app.ai.answer import PolicyRetriever
 from backend.app.ai.generation import PolicyAnswerProvider
 from backend.app.ai.investigation import InvestigationModel
+from backend.app.ai.local_transformers import LocalTransformersPolicyAnswerProvider
 from backend.app.diagnostics import (
     new_correlation_id,
     reset_correlation_id,
@@ -92,6 +93,26 @@ def _configured_commerce_repository() -> CommerceRepository | None:
     return CommerceRepository(commerce_database_url)
 
 
+def _configured_policy_response_provider() -> PolicyAnswerProvider | None:
+    """Opt into a cached, local-only answer model through explicit config."""
+
+    model_name = os.getenv("RESOLVEAI_LOCAL_POLICY_MODEL", "").strip()
+    if not model_name:
+        return None
+    timeout_value = os.getenv(
+        "RESOLVEAI_LOCAL_POLICY_TIMEOUT_SECONDS",
+        "8",
+    )
+    try:
+        timeout_seconds = float(timeout_value)
+    except ValueError as error:
+        raise ValueError("RESOLVEAI_LOCAL_POLICY_TIMEOUT_SECONDS must be numeric") from error
+    return LocalTransformersPolicyAnswerProvider(
+        model_name,
+        timeout_seconds=timeout_seconds,
+    )
+
+
 class _RefundDecisionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -149,15 +170,21 @@ def create_app(
         if commerce_repository is not None
         else _configured_commerce_repository()
     )
+    configured_response_provider = (
+        response_provider
+        if response_provider is not None
+        else _configured_policy_response_provider()
+    )
     service = InMemoryResolveService(
         configured_database_url,
         policy_retriever=configured_policy_retriever,
-        response_provider=response_provider,
+        response_provider=configured_response_provider,
         investigation_model=investigation_model,
         commerce_repository=configured_commerce_repository,
     )
     app.state.service = service
     app.state.policy_retriever = configured_policy_retriever
+    app.state.response_provider = configured_response_provider
     app.state.commerce_repository = configured_commerce_repository
     router = APIRouter(prefix="/api/v1")
 
