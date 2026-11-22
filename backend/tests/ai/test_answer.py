@@ -51,7 +51,15 @@ class FixedCorpusEmbeddingProvider:
         vectors: list[list[float]] = []
         for text in texts:
             lowered = text.lower()
-            axis = 1 if "refund" in lowered else 2 if "return" in lowered else 0
+            axis = (
+                3
+                if "approver" in lowered or "authorization" in lowered
+                else 1
+                if "refund" in lowered
+                else 2
+                if "return" in lowered
+                else 0
+            )
             vector = [0.0] * 384
             vector[axis] = 1.0
             vectors.append(vector)
@@ -80,6 +88,58 @@ def test_answer_shape_and_citation_for_published_public_delivery_policy() -> Non
         "grounded": True,
         "needs_handoff": False,
     }
+
+
+def test_operational_answers_preserve_material_policy_conditions() -> None:
+    expectations = {
+        ("delivery-policy", "Late delivery follow-up"): (
+            "three business days",
+            "not guaranteed",
+        ),
+        ("missing-package-policy", "Missing packages"): (
+            "within seven days",
+            "does not guarantee compensation",
+        ),
+        ("product-damage-policy", "Damaged items"): (
+            "within 14 days",
+            "do not discard",
+        ),
+        ("fulfillment-policy", "Wrong items"): (
+            "within 14 days",
+            "do not ship it back",
+        ),
+        ("fulfillment-policy", "Partial order deliveries"): (
+            "order lines",
+            "not credit approval",
+        ),
+        ("order-cancellation-policy", "Order cancellations"): (
+            "before carrier fulfillment",
+            "not guaranteed",
+        ),
+        ("returns-policy", "Return window"): (
+            "30 days",
+            "support must confirm eligibility",
+        ),
+        ("refund-processing-policy", "Return credit processing"): (
+            "ineligible request",
+        ),
+        ("warranty-policy", "Product warranty coverage"): (
+            "12-month",
+            "repair",
+        ),
+    }
+
+    for (document_id, section), fragments in expectations.items():
+        record = next(
+            item
+            for item in POLICY_CORPUS
+            if item.document_id == document_id and item.section == section
+        )
+        response = answer_from_published_policy(section, corpus=(record,))
+        assert response.grounded is True
+        assert response.answer is not None
+        lowered = response.answer.casefold()
+        assert all(fragment in lowered for fragment in fragments)
 
 
 def test_unknown_query_never_invents_an_answer() -> None:

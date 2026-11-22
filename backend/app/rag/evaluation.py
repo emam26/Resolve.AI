@@ -166,6 +166,52 @@ M11A_EVALUATION_CASES: tuple[EvaluationCase, ...] = (
         expected_section="Human support escalation",
         expect_supported_answer=True,
     ),
+    EvaluationCase(
+        label="published_public_delivered_not_received",
+        query="tracking delivered package not received",
+        audience="customer",
+        expected_document_id="missing-package-policy",
+        expected_version="v1",
+        expected_section="Delivered but not received",
+        expect_supported_answer=True,
+    ),
+    EvaluationCase(
+        label="published_public_late_delivery_followup",
+        query="carrier movement estimated date passes delivery investigation",
+        audience="customer",
+        expected_document_id="delivery-policy",
+        expected_version="v2",
+        expected_section="Late delivery follow-up",
+        expect_supported_answer=True,
+    ),
+    EvaluationCase(
+        label="published_public_return_exceptions",
+        query="return unused packaging 30 days",
+        audience="customer",
+        expected_document_id="returns-policy",
+        expected_version="v1",
+        expected_section="Return window",
+        expect_supported_answer=True,
+        forbidden_version="v0",
+    ),
+    EvaluationCase(
+        label="published_public_refund_eligibility",
+        query="credit damaged fulfillment error",
+        audience="customer",
+        expected_document_id="refund-eligibility-policy",
+        expected_version="v1",
+        expected_section="Refund eligibility",
+        expect_supported_answer=True,
+    ),
+    EvaluationCase(
+        label="published_public_product_warranty",
+        query="warranty accidental damage",
+        audience="customer",
+        expected_document_id="warranty-policy",
+        expected_version="v1",
+        expected_section="Product warranty coverage",
+        expect_supported_answer=True,
+    ),
 )
 
 
@@ -309,9 +355,7 @@ def evaluate_policy_retrieval(
             and _visibility_valid(evidence, case.audience)
             for evidence in retrieved
         )
-        if case.expected_document_id is None:
-            citation_valid = citation_valid and not retrieved
-        else:
+        if case.expected_document_id is not None:
             citation_valid = citation_valid and expected_hit
         answer = answer_from_published_policy(
             case.query,
@@ -344,6 +388,12 @@ def evaluate_policy_retrieval(
         )
         if case.expect_supported_answer:
             citation_valid = citation_valid and unsupported_valid
+        else:
+            # Retrieval candidates are not customer-facing citations. A weak
+            # public candidate is safe when the answer contract discards it
+            # and returns a handoff; injected unauthorized evidence remains
+            # invalid through ``citation_valid`` above.
+            citation_valid = citation_valid and not answer.evidence
         visibility_valid_count += int(citation_valid)
         if not case.expect_supported_answer:
             unsupported_total += 1

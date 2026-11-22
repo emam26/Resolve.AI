@@ -29,6 +29,14 @@ class DeterministicEmbeddingProvider:
         "return": 4,
         "unused": 5,
         "moon": 6,
+        "warranty": 7,
+        "accidental": 8,
+        "damage": 9,
+        "credit": 10,
+        "fulfillment": 11,
+        "error": 12,
+        "packaging": 13,
+        "received": 14,
     }
 
     def embed(self, texts: list[str]) -> list[list[float]]:
@@ -85,6 +93,32 @@ def test_postgres_customer_cannot_retrieve_internal_policy(pg_retriever) -> None
     assert all(result.visibility == "public" for result in results)
 
 
+def test_postgres_customer_gets_public_warranty_not_internal_exception_matrix(
+    pg_retriever,
+) -> None:
+    results = pg_retriever.retrieve_published_policy(
+        "warranty accidental damage", audience="customer", top_k=3
+    )
+
+    assert results
+    assert results[0].document_id == "warranty-policy"
+    assert results[0].section == "Product warranty coverage"
+    assert all(result.visibility == "public" for result in results)
+
+
+def test_postgres_staff_can_retrieve_internal_warranty_policy(pg_retriever) -> None:
+    results = pg_retriever.retrieve_published_policy(
+        "warranty exclusion matrix", audience="support_agent", top_k=3
+    )
+
+    assert any(
+        result.document_id == "warranty-policy"
+        and result.section == "Warranty exception matrix"
+        and result.visibility == "internal"
+        for result in results
+    )
+
+
 def test_postgres_staff_can_retrieve_published_internal_policy(pg_retriever) -> None:
     results = pg_retriever.retrieve_published_policy(
         "refund review", audience="support_agent"
@@ -100,6 +134,50 @@ def test_postgres_results_are_repeatable(pg_retriever) -> None:
     second = pg_retriever.retrieve_published_policy("shipment delayed")
 
     assert first == second
+
+
+def test_seed_refreshes_existing_policy_embeddings(pg_retriever) -> None:
+    database_url = os.environ["RESOLVEAI_TEST_POSTGRES_URL"]
+    engine = create_engine(database_url, future=True)
+    record = next(
+        item
+        for item in POLICY_CORPUS
+        if item.document_id == "delivery-policy"
+        and item.document_version == "v2"
+        and item.section == "Delayed shipments"
+    )
+
+    class AlternateEmbeddingProvider:
+        def embed(self, texts: list[str]) -> list[list[float]]:
+            return [[0.0] * 20 + [1.0] + [0.0] * 363 for _ in texts]
+
+    class RestoredEmbeddingProvider:
+        def embed(self, texts: list[str]) -> list[list[float]]:
+            return [
+                [
+                    1.0 if token in text.casefold() else 0.0
+                    for token in ("shipment", "delayed")
+                ]
+                + [0.0] * 382
+                for text in texts
+            ]
+
+    try:
+        seed_policy_embeddings(engine, (record,), AlternateEmbeddingProvider())
+        with engine.connect() as connection:
+            row = connection.execute(
+                PolicyEmbeddingRow.__table__.select().where(
+                    PolicyEmbeddingRow.document_id == record.document_id,
+                    PolicyEmbeddingRow.document_version == record.document_version,
+                    PolicyEmbeddingRow.section == record.section,
+                )
+            ).first()
+        assert row is not None
+        assert row.embedding[20] == 1.0
+        assert sum(row.embedding[:20]) == 0.0
+    finally:
+        seed_policy_embeddings(engine, (record,), RestoredEmbeddingProvider())
+        engine.dispose()
 
 
 def test_customer_api_uses_real_postgres_retriever(pg_retriever) -> None:

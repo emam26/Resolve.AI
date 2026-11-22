@@ -23,7 +23,11 @@ def test_corpus_contains_required_version_and_visibility_cases() -> None:
     assert ("fulfillment-policy", "v1", "published", "public") in identifiers
     assert ("order-cancellation-policy", "v1", "published", "public") in identifiers
     assert ("returns-policy", "v1", "published", "public") in identifiers
+    assert ("returns-policy", "v0", "unpublished", "public") in identifiers
+    assert ("refund-eligibility-policy", "v1", "published", "public") in identifiers
     assert ("refund-processing-policy", "v1", "published", "public") in identifiers
+    assert ("warranty-policy", "v1", "published", "public") in identifiers
+    assert ("warranty-policy", "v1", "published", "internal") in identifiers
     assert ("human-support-policy", "v1", "published", "public") in identifiers
     assert ("refund-review-policy", "v1", "published", "internal") in identifiers
 
@@ -63,6 +67,25 @@ def test_customer_cannot_receive_unpublished_or_internal_evidence() -> None:
     )
     assert all(result.document_id != "refund-review-policy" for result in internal_query)
     assert internal_query == []
+
+
+def test_customer_retrieval_covers_warranty_and_return_eligibility() -> None:
+    warranty = retrieve_published_policy(
+        "warranty accidental damage", audience="customer", top_k=1
+    )
+    returns = retrieve_published_policy(
+        "return unused packaging 30 days", audience="customer", top_k=1
+    )
+
+    assert (warranty[0].document_id, warranty[0].section) == (
+        "warranty-policy",
+        "Product warranty coverage",
+    )
+    assert (returns[0].document_id, returns[0].document_version, returns[0].section) == (
+        "returns-policy",
+        "v1",
+        "Return window",
+    )
 
 
 def test_staff_can_retrieve_published_internal_policy() -> None:
@@ -122,8 +145,13 @@ def test_m11a_predeclared_operational_cases_are_safe_and_grounded() -> None:
         "published_public_return_window",
         "published_public_return_credit_processing",
         "published_public_human_escalation",
+        "published_public_delivered_not_received",
+        "published_public_late_delivery_followup",
+        "published_public_return_exceptions",
+        "published_public_refund_eligibility",
+        "published_public_product_warranty",
     ]
-    assert report.query_count == 14
+    assert report.query_count == 19
     assert report.recall_at_3 == 1.0
     assert report.wrong_version_exposure == 0.0
     assert report.citation_visibility_accuracy == 1.0

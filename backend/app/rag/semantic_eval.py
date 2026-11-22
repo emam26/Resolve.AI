@@ -11,7 +11,11 @@ from __future__ import annotations
 import json
 import os
 
-from .evaluation import evaluate_policy_retrieval
+from .evaluation import (
+    DEFAULT_EVALUATION_CASES,
+    M11A_EVALUATION_CASES,
+    evaluate_policy_retrieval,
+)
 from .pgvector_store import PgVectorPolicyRetriever
 from .semantic import SentenceTransformerEmbeddingProvider
 
@@ -36,7 +40,10 @@ def evaluate_from_environment() -> dict[str, object]:
         ),
     )
     try:
-        return evaluate_policy_retrieval(policy_retriever=retriever).as_dict()
+        return evaluate_policy_retrieval(
+            cases=DEFAULT_EVALUATION_CASES + M11A_EVALUATION_CASES,
+            policy_retriever=retriever,
+        ).as_dict()
     finally:
         retriever.close()
 
