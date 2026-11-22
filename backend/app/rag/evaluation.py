@@ -249,6 +249,35 @@ class RetrievalEvaluationReport(BaseModel):
         }
 
 
+class AnswerContractCaseResult(BaseModel):
+    """Outcome of the customer-facing grounded-answer contract for one case."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    label: str
+    answer_contract_valid: bool
+    citation_access_control_valid: bool
+    wrong_version_exposed: bool
+    retrieval_mode: str
+
+
+class AnswerContractEvaluationReport(BaseModel):
+    """Keep answer usefulness separate from retrieval candidate ranking."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    query_count: int
+    supported_query_count: int
+    supported_answer_accuracy: float
+    unsupported_answer_behavior: float
+    citation_access_control_accuracy: float
+    wrong_version_exposure: float
+    cases: list[AnswerContractCaseResult]
+
+    def as_dict(self) -> dict[str, object]:
+        return self.model_dump(mode="json")
+
+
 class _SnapshotPolicyRetriever:
     """Replay one retrieval result through the answer-layer safety checks."""
 
@@ -426,10 +455,124 @@ def evaluate_policy_retrieval(
     )
 
 
+def evaluate_answer_contract(
+    cases: Sequence[EvaluationCase] = DEFAULT_EVALUATION_CASES,
+    *,
+    corpus: Sequence[PolicyRecord] = POLICY_CORPUS,
+    policy_retriever: PolicyRetriever | None = None,
+) -> AnswerContractEvaluationReport:
+    """Evaluate the actual safe answer path, including configured fallback.
+
+    This intentionally does not substitute a snapshot retriever.  The
+    customer-facing result—including the existing lexical fallback after a
+    semantic-backend failure, when applicable—rather than the raw candidate
+    list is what this report measures.
+    """
+
+    if not cases:
+        raise ValueError("at least one evaluation case is required")
+
+    from backend.app.ai.answer import answer_from_published_policy
+
+    results: list[AnswerContractCaseResult] = []
+    supported_total = 0
+    supported_valid = 0
+    unsupported_total = 0
+    unsupported_valid = 0
+    citation_valid_count = 0
+    wrong_version_count = 0
+    version_sensitive_count = 0
+
+    for case in cases:
+        answer = answer_from_published_policy(
+            case.query,
+            audience=case.audience,
+            corpus=corpus,
+            policy_retriever=policy_retriever,
+        )
+        primary_matches_expected = bool(answer.evidence) and _matches_expected(
+            answer.evidence[0], case
+        )
+        evidence_valid = all(
+            evidence.status == "published"
+            and bool(evidence.release_id)
+            and _visibility_valid(evidence, case.audience)
+            for evidence in answer.evidence
+        )
+        if case.expect_supported_answer:
+            supported_total += 1
+            answer_valid = (
+                answer.grounded
+                and answer.answer is not None
+                and not answer.needs_handoff
+                and primary_matches_expected
+                and evidence_valid
+            )
+            supported_valid += int(answer_valid)
+            citation_valid = answer_valid
+        else:
+            unsupported_total += 1
+            answer_valid = (
+                not answer.grounded
+                and answer.answer is None
+                and answer.needs_handoff
+                and not answer.evidence
+            )
+            unsupported_valid += int(answer_valid)
+            citation_valid = answer_valid and evidence_valid
+
+        wrong_version = any(
+            (
+                case.forbidden_document_id is not None
+                and evidence.document_id == case.forbidden_document_id
+            )
+            or (
+                case.forbidden_version is not None
+                and evidence.document_id == case.expected_document_id
+                and evidence.document_version == case.forbidden_version
+            )
+            for evidence in answer.evidence
+        )
+        if case.forbidden_document_id is not None or case.forbidden_version is not None:
+            version_sensitive_count += 1
+            wrong_version_count += int(wrong_version)
+        citation_valid_count += int(citation_valid)
+        results.append(
+            AnswerContractCaseResult(
+                label=case.label,
+                answer_contract_valid=answer_valid,
+                citation_access_control_valid=citation_valid,
+                wrong_version_exposed=wrong_version,
+                retrieval_mode=answer.retrieval_mode,
+            )
+        )
+
+    return AnswerContractEvaluationReport(
+        query_count=len(cases),
+        supported_query_count=supported_total,
+        supported_answer_accuracy=(
+            supported_valid / supported_total if supported_total else 0.0
+        ),
+        unsupported_answer_behavior=(
+            unsupported_valid / unsupported_total if unsupported_total else 0.0
+        ),
+        citation_access_control_accuracy=citation_valid_count / len(cases),
+        wrong_version_exposure=(
+            wrong_version_count / version_sensitive_count
+            if version_sensitive_count
+            else 0.0
+        ),
+        cases=results,
+    )
+
+
 __all__ = [
+    "AnswerContractCaseResult",
+    "AnswerContractEvaluationReport",
     "DEFAULT_EVALUATION_CASES",
     "EvaluationCase",
     "M11A_EVALUATION_CASES",
     "RetrievalEvaluationReport",
     "evaluate_policy_retrieval",
+    "evaluate_answer_contract",
 ]

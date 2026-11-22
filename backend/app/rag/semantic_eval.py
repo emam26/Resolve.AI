@@ -14,6 +14,7 @@ import os
 from .evaluation import (
     DEFAULT_EVALUATION_CASES,
     M11A_EVALUATION_CASES,
+    evaluate_answer_contract,
     evaluate_policy_retrieval,
 )
 from .pgvector_store import PgVectorPolicyRetriever
@@ -40,10 +41,17 @@ def evaluate_from_environment() -> dict[str, object]:
         ),
     )
     try:
-        return evaluate_policy_retrieval(
-            cases=DEFAULT_EVALUATION_CASES + M11A_EVALUATION_CASES,
-            policy_retriever=retriever,
-        ).as_dict()
+        cases = DEFAULT_EVALUATION_CASES + M11A_EVALUATION_CASES
+        return {
+            "retrieval": evaluate_policy_retrieval(
+                cases=cases,
+                policy_retriever=retriever,
+            ).as_dict(),
+            "answer_contract": evaluate_answer_contract(
+                cases=cases,
+                policy_retriever=retriever,
+            ).as_dict(),
+        }
     finally:
         retriever.close()
 

@@ -5,6 +5,7 @@ from backend.app.rag import (
     evaluate_policy_retrieval,
     retrieve_published_policy,
 )
+from backend.app.rag.evaluation import evaluate_answer_contract
 from backend.app.rag.corpus import POLICY_CORPUS
 from backend.app.rag.evaluation import M11A_EVALUATION_CASES
 
@@ -318,3 +319,40 @@ def test_evaluation_rejects_wrong_top_ranked_policy() -> None:
 
     assert report.recall_at_3 == 1.0
     assert report.citation_visibility_accuracy == 0.0
+
+
+def test_answer_contract_evaluation_measures_actual_semantic_result() -> None:
+    class SupportedRetriever:
+        def retrieve_published_policy(
+            self, query: str, audience: str = "customer", top_k: int = 3
+        ) -> list[PolicyEvidence]:
+            del query, audience, top_k
+            return [
+                PolicyEvidence(
+                    document_id="returns-policy",
+                    document_version="v1",
+                    section="Return window",
+                    release_id="release_2026_11_01",
+                    visibility="public",
+                    score=0.8,
+                    text="A return request must be submitted within 30 calendar days after delivery.",
+                )
+            ]
+
+    case = EvaluationCase(
+        label="semantic_answer_contract",
+        query="return 30 days unused",
+        audience="customer",
+        expected_document_id="returns-policy",
+        expected_version="v1",
+        expected_section="Return window",
+        expect_supported_answer=True,
+    )
+
+    report = evaluate_answer_contract(
+        cases=(case,), policy_retriever=SupportedRetriever()
+    )
+
+    assert report.supported_answer_accuracy == 1.0
+    assert report.citation_access_control_accuracy == 1.0
+    assert report.cases[0].retrieval_mode == "semantic"

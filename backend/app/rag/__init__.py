@@ -2,9 +2,11 @@
 
 from .corpus import POLICY_CORPUS, get_policy_corpus
 from .evaluation import (
+    AnswerContractEvaluationReport,
     DEFAULT_EVALUATION_CASES,
     EvaluationCase,
     RetrievalEvaluationReport,
+    evaluate_answer_contract,
     evaluate_policy_retrieval,
 )
 from .models import (
@@ -24,6 +26,7 @@ from .retrieval import is_sufficient_policy_match, retrieve_published_policy
 
 __all__ = [
     "DEFAULT_EVALUATION_CASES",
+    "AnswerContractEvaluationReport",
     "EvaluationCase",
     "POLICY_CORPUS",
     "PolicyAudience",
@@ -34,6 +37,7 @@ __all__ = [
     "PgVectorPolicyRetriever",
     "PostgresFullTextPolicyRetriever",
     "RetrievalEvaluationReport",
+    "evaluate_answer_contract",
     "evaluate_policy_retrieval",
     "get_policy_corpus",
     "is_sufficient_policy_match",
