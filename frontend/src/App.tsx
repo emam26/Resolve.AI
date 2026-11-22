@@ -6,6 +6,7 @@ import {
   appendCustomerMessage,
   approveRefund,
   claimSupportConversation,
+  createRefund,
   createWidgetConversation,
   ConversationResponse,
   DemoLoginResponse,
@@ -66,6 +67,11 @@ export default function App() {
   const [selectedSupportConversationId, setSelectedSupportConversationId] = useState<string | null>(null);
   const [staffDraft, setStaffDraft] = useState("");
   const [staffNotice, setStaffNotice] = useState<Notice | null>(null);
+  const [supportRefundAmount, setSupportRefundAmount] = useState("25.00");
+  const [supportRefundReason, setSupportRefundReason] = useState("Delivery delay review");
+  const [supportRefundNotice, setSupportRefundNotice] = useState<string | null>(null);
+  const [supportRefundRequestKey, setSupportRefundRequestKey] = useState<string | null>(null);
+  const [isCreatingRefund, setIsCreatingRefund] = useState(false);
   const [isStaffStarting, setIsStaffStarting] = useState(false);
   const [isInboxLoading, setIsInboxLoading] = useState(false);
   const [isClaiming, setIsClaiming] = useState(false);
@@ -280,6 +286,46 @@ export default function App() {
     }
   }
 
+  async function submitRefundRequest(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const selected = supportInbox.find((item) => item.conversation_id === selectedSupportConversationId);
+    if (!staffSession || !selected || selected.state !== "HUMAN_ACTIVE" || isCreatingRefund) return;
+
+    const amountDollars = Number.parseFloat(supportRefundAmount);
+    const reason = supportRefundReason.trim();
+    if (!Number.isFinite(amountDollars) || amountDollars <= 0 || amountDollars > 50 || !reason) {
+      setStaffNotice({ kind: "error", message: "Enter a refund amount from $0.01 to $50.00 and a reason." });
+      return;
+    }
+
+    setStaffNotice(null);
+    setSupportRefundNotice(null);
+    setIsCreatingRefund(true);
+    const idempotencyKey = supportRefundRequestKey ?? `support-ui-${selected.conversation_id}-${Date.now()}`;
+    if (supportRefundRequestKey === null) {
+      setSupportRefundRequestKey(idempotencyKey);
+    }
+    try {
+      const created = await createRefund(
+        staffSession.session_id,
+        selected.conversation_id,
+        {
+          amount_cents: Math.round(amountDollars * 100),
+          reason,
+          idempotency_key: idempotencyKey,
+        },
+      );
+      setSupportRefundNotice(`${created.refund_id} is pending separate approver review.`);
+      setSupportRefundAmount("25.00");
+      setSupportRefundReason("Delivery delay review");
+      setSupportRefundRequestKey(null);
+    } catch (error) {
+      setStaffNotice(noticeFromError(error));
+    } finally {
+      setIsCreatingRefund(false);
+    }
+  }
+
   async function loadRefunds(sessionId: string) {
     setIsRefundsLoading(true);
     try {
@@ -357,13 +403,13 @@ export default function App() {
             <p className="eyebrow accent">Customer widget preview</p>
             <h2 id="intro-title">A thoughtful place to start an order question.</h2>
             <p className="intro-copy">
-              This is a synthetic customer support experience for the ResolveAI M1 milestone.
+              This is a synthetic customer support experience for ResolveAI.
               Every request stays on your configured local API.
             </p>
 
             <div className="demo-note">
               <span className="note-icon" aria-hidden="true">i</span>
-              <p><strong>Demo only.</strong> No live customer, commerce, or AI service is connected.</p>
+              <p><strong>Demo only.</strong> No live customer, commerce, or model provider is connected.</p>
             </div>
 
             <div className="session-card">
@@ -486,10 +532,20 @@ export default function App() {
                 <div className="m1-state" role="status">
                   <span className="state-icon" aria-hidden="true">⌁</span>
                   <div>
-                    <strong>{conversation.state === "HANDOFF_QUEUED" ? "Human support requested" : "M3 local demo state"}</strong>
+                    <strong>{conversation.state === "HANDOFF_QUEUED"
+                      ? "Human support requested"
+                      : conversation.state === "HUMAN_ACTIVE"
+                        ? "Human support active"
+                        : conversation.state === "RESOLVED"
+                          ? "Conversation resolved"
+                          : "AI support active"}</strong>
                     <p>{conversation.state === "HANDOFF_QUEUED"
                       ? "Your conversation is queued for the local demo support inbox."
-                      : "No automated answer is available yet. You can request a human review."}</p>
+                      : conversation.state === "HUMAN_ACTIVE"
+                        ? "A support agent is handling this conversation."
+                        : conversation.state === "RESOLVED"
+                          ? "This conversation is closed in the local demo."
+                          : "Ask an order or policy question. You can request a human review at any time."}</p>
                   </div>
                   {conversation.state === "AI_ACTIVE" && (
                     <button className="secondary-button compact-button" type="button" onClick={requestHumanSupport} disabled={isHandingOff}>
@@ -506,9 +562,9 @@ export default function App() {
                     onChange={(event) => setDraft(event.target.value)}
                     placeholder="Type your question…"
                     rows={2}
-                    disabled={isSending}
+                    disabled={isSending || conversation.state !== "AI_ACTIVE"}
                   />
-                  <button className="send-button" type="submit" disabled={isSending || !draft.trim()} aria-label="Send message">
+                  <button className="send-button" type="submit" disabled={isSending || conversation.state !== "AI_ACTIVE" || !draft.trim()} aria-label="Send message">
                     {isSending ? "…" : "↗"}
                   </button>
                 </form>
@@ -536,7 +592,7 @@ export default function App() {
                 <p className="muted">The local API resolves this session as support_001. No live support, AI, or payment system is connected.</p>
               </div>
               <button className="primary-button" type="button" onClick={startStaffSession} disabled={isStaffStarting}>
-                {isStaffStarting ? "Opening staff inboxâ€¦" : "Start Demo Support session"}
+                {isStaffStarting ? "Opening staff inbox..." : "Start Demo Support session"}
               </button>
             </div>
           ) : (
@@ -546,11 +602,11 @@ export default function App() {
                   <span className="avatar">SA</span>
                   <div>
                     <strong>{staffSession.actor.display_name}</strong>
-                    <span>{staffSession.actor.actor_id} Â· {staffSession.actor.role}</span>
+                    <span>{staffSession.actor.actor_id} · {staffSession.actor.role}</span>
                   </div>
                 </div>
                 <button className="secondary-button" type="button" onClick={refreshStaffInbox} disabled={isInboxLoading}>
-                  {isInboxLoading ? "Refreshingâ€¦" : "Refresh inbox"}
+                  {isInboxLoading ? "Refreshing..." : "Refresh inbox"}
                 </button>
               </div>
 
@@ -565,7 +621,7 @@ export default function App() {
                   </div>
                   {isInboxLoading && supportInbox.length === 0 ? (
                     <div className="staff-empty-state">
-                      <strong>Loading inboxâ€¦</strong>
+                      <strong>Loading inbox...</strong>
                       <span>Checking the local support queue.</span>
                     </div>
                   ) : supportInbox.length === 0 ? (
@@ -582,13 +638,17 @@ export default function App() {
                             className={`inbox-item ${item.conversation_id === selectedSupportConversationId ? "selected" : ""}`}
                             key={item.conversation_id}
                             type="button"
-                            onClick={() => setSelectedSupportConversationId(item.conversation_id)}
+                            onClick={() => {
+                              setSelectedSupportConversationId(item.conversation_id);
+                              setSupportRefundRequestKey(null);
+                              setSupportRefundNotice(null);
+                            }}
                           >
                             <span className="inbox-item-top">
                               <strong>{item.conversation_id}</strong>
                               <span className="state-badge">{item.state}</span>
                             </span>
-                            <span className="inbox-item-meta">{item.customer_id ?? "Unknown customer"} Â· {item.order_id ?? "No order"}</span>
+                            <span className="inbox-item-meta">{item.customer_id ?? "Unknown customer"} · {item.order_id ?? "No order"}</span>
                             <span className="inbox-item-preview">{latestMessage?.content ?? "No messages yet."}</span>
                           </button>
                         );
@@ -600,7 +660,7 @@ export default function App() {
                 <section className="staff-conversation" aria-labelledby="staff-conversation-title">
                   {!selectedSupportConversation ? (
                     <div className="staff-empty-state large">
-                      <div className="staff-login-icon" aria-hidden="true">â†’</div>
+                      <div className="staff-login-icon" aria-hidden="true">-&gt;</div>
                       <strong>Select a conversation</strong>
                       <span>Choose a queued item to review its transcript.</span>
                     </div>
@@ -610,18 +670,18 @@ export default function App() {
                         <div>
                           <p className="section-label">Conversation</p>
                           <h3 id="staff-conversation-title">{selectedSupportConversation.conversation_id}</h3>
-                          <span className="staff-conversation-meta">{selectedSupportConversation.customer_id ?? "Unknown customer"} Â· {selectedSupportConversation.order_id ?? "No order attached"}</span>
+                          <span className="staff-conversation-meta">{selectedSupportConversation.customer_id ?? "Unknown customer"} · {selectedSupportConversation.order_id ?? "No order attached"}</span>
                         </div>
                         <div className="staff-actions">
                           <span className="state-badge">{selectedSupportConversation.state}</span>
                           {selectedSupportConversation.state === "HANDOFF_QUEUED" && (
                             <button className="primary-button compact-button" type="button" onClick={claimSelectedConversation} disabled={isClaiming}>
-                              {isClaiming ? "Claimingâ€¦" : "Claim conversation"}
+                              {isClaiming ? "Claiming..." : "Claim conversation"}
                             </button>
                           )}
                           {selectedSupportConversation.state === "HUMAN_ACTIVE" && (
                             <button className="secondary-button compact-button" type="button" onClick={resolveSelectedConversation} disabled={isResolving}>
-                              {isResolving ? "Resolvingâ€¦" : "Resolve"}
+                              {isResolving ? "Resolving..." : "Resolve"}
                             </button>
                           )}
                         </div>
@@ -644,20 +704,68 @@ export default function App() {
                       </div>
 
                       {selectedSupportConversation.state === "HUMAN_ACTIVE" ? (
+                        <>
                         <form className="message-composer" onSubmit={sendStaffMessage}>
                           <label className="sr-only" htmlFor="staff-message">Staff reply</label>
                           <textarea
                             id="staff-message"
                             value={staffDraft}
                             onChange={(event) => setStaffDraft(event.target.value)}
-                            placeholder="Write a support replyâ€¦"
+                            placeholder="Write a support reply..."
                             rows={2}
                             disabled={isStaffSending}
                           />
                           <button className="send-button" type="submit" disabled={isStaffSending || !staffDraft.trim()} aria-label="Send staff reply">
-                            {isStaffSending ? "â€¦" : "â†—"}
+                            {isStaffSending ? "..." : "Send"}
                           </button>
                         </form>
+                        {selectedSupportConversation.order_id && (
+                          <form className="refund-request-form" onSubmit={submitRefundRequest}>
+                            <div className="refund-request-heading">
+                              <div>
+                                <span className="section-label">Refund review request</span>
+                                <strong>Prepare a synthetic review</strong>
+                              </div>
+                              <span className="muted">Maximum $50.00</span>
+                            </div>
+                            <div className="refund-request-fields">
+                              <label htmlFor="support-refund-amount">Amount (USD)
+                                <input
+                                  id="support-refund-amount"
+                                  type="number"
+                                  min="0.01"
+                                  max="50"
+                                  step="0.01"
+                                  value={supportRefundAmount}
+                                    onChange={(event) => {
+                                      setSupportRefundAmount(event.target.value);
+                                      setSupportRefundRequestKey(null);
+                                    }}
+                                  disabled={isCreatingRefund}
+                                />
+                              </label>
+                              <label htmlFor="support-refund-reason">Reason
+                                <input
+                                  id="support-refund-reason"
+                                  value={supportRefundReason}
+                                    onChange={(event) => {
+                                      setSupportRefundReason(event.target.value);
+                                      setSupportRefundRequestKey(null);
+                                    }}
+                                  maxLength={500}
+                                  disabled={isCreatingRefund}
+                                />
+                              </label>
+                              <button className="secondary-button" type="submit" disabled={isCreatingRefund}>
+                                {isCreatingRefund ? "Creating review…" : "Create review request"}
+                              </button>
+                            </div>
+                            {supportRefundNotice && (
+                              <div className="refund-request-success" role="status">{supportRefundNotice}</div>
+                            )}
+                          </form>
+                        )}
+                        </>
                       ) : (
                         <div className="staff-state" role="status">
                           <strong>{selectedSupportConversation.state === "RESOLVED" ? "Conversation resolved" : "Claim required"}</strong>
@@ -829,7 +937,7 @@ export default function App() {
         )}
 
         <footer className="footer-note">
-          <span>ResolveAI · M1 authenticated widget inquiry</span>
+          <span>ResolveAI · synthetic customer widget</span>
           <span>API base: {import.meta.env.VITE_API_BASE_URL || "same origin"}</span>
         </footer>
       </section>

@@ -84,6 +84,12 @@ export interface RefundSummary {
   decision_note: string | null;
 }
 
+export interface CreateRefundRequest {
+  amount_cents: number;
+  reason: string;
+  idempotency_key: string;
+}
+
 export interface RefundListResponse {
   refunds: RefundSummary[];
 }
@@ -263,6 +269,21 @@ export function resolveSupportConversation(
   return requestJson<SupportConversationSummary>(
     `/api/v1/support/conversations/${encodeURIComponent(conversationId)}/resolve`,
     { method: "POST" },
+    sessionId,
+  );
+}
+
+export function createRefund(
+  sessionId: string,
+  conversationId: string,
+  request: CreateRefundRequest,
+): Promise<RefundSummary> {
+  return requestJson<RefundSummary>(
+    `/api/v1/support/conversations/${encodeURIComponent(conversationId)}/refunds`,
+    {
+      method: "POST",
+      body: JSON.stringify(request),
+    },
     sessionId,
   );
 }
