@@ -403,6 +403,68 @@ class InMemoryResolveService:
             conversations=[self._support_summary(record) for record in self._repository.list_support()]
         )
 
+    def operations_summary(self, actor: ActorSummary) -> dict[str, object]:
+        """Return persisted operational counts for authorized staff roles."""
+
+        if actor.role not in {"support_agent", "refund_approver", "merchant_admin"}:
+            raise ForbiddenOperation("operations summary requires a staff role")
+        conversations = self._repository.list_all()
+        counts = {
+            "total_conversations": len(conversations),
+            "active_conversations": sum(
+                record.state in {"AI_ACTIVE", "HUMAN_ACTIVE"}
+                for record in conversations
+            ),
+            "waiting_conversations": sum(
+                record.state == "HANDOFF_QUEUED" for record in conversations
+            ),
+            "resolved_conversations": sum(
+                record.state == "RESOLVED" for record in conversations
+            ),
+        }
+        recent = sorted(
+            conversations,
+            key=lambda record: (
+                record.messages[-1].created_at if record.messages else datetime.min.replace(tzinfo=timezone.utc),
+                record.conversation_id,
+            ),
+            reverse=True,
+        )[:20]
+        activity = [
+            {
+                "conversation_id": record.conversation_id,
+                "state": record.state,
+                "order_id": record.order_id,
+                "customer_id": record.owner_customer_id,
+                "assigned_staff_id": record.assigned_staff_id,
+                "activity_type": "message" if record.messages else "conversation_created",
+                "last_activity_at": (
+                    record.messages[-1].created_at if record.messages else None
+                ),
+            }
+            for record in recent
+        ]
+        pending_refunds = sum(
+            refund.state == "PENDING_REVIEW"
+            for refund in self._refund_repository.list_all()
+        )
+        return {
+            **counts,
+            "pending_refund_reviews": pending_refunds,
+            "recent_activity": activity,
+        }
+
+    def workspace_team(self, actor: ActorSummary) -> list[ActorSummary]:
+        """Expose the fixed synthetic staff roster to the merchant admin only."""
+
+        if actor.role != "merchant_admin":
+            raise ForbiddenOperation("workspace team requires merchant_admin")
+        return [
+            self.actor_summary(SUPPORT_ACTOR_ID),
+            self.actor_summary(REFUND_APPROVER_ACTOR_ID),
+            self.actor_summary(MERCHANT_ADMIN_ACTOR_ID),
+        ]
+
     def claim(
         self, conversation_id: str, actor: ActorSummary
     ) -> SupportConversationSummary | None:

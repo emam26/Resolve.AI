@@ -415,6 +415,17 @@ class ConversationRepository:
             ).all()
             return [self._snapshot(session, row) for row in rows]
 
+    def list_all(self) -> list[StoredConversation]:
+        """Return all persisted conversations in a stable creation order."""
+
+        with self._session_factory() as session:
+            rows = session.scalars(
+                select(ConversationRow).order_by(
+                    ConversationRow.created_at, ConversationRow.conversation_id
+                )
+            ).all()
+            return [self._snapshot(session, row) for row in rows]
+
     @staticmethod
     def _allocate_number(session, sequence_key: str) -> int:
         sequence = session.scalar(

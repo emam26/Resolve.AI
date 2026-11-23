@@ -1,9 +1,9 @@
 """Testable FastAPI routes for the deterministic M1 API slice."""
 
 import os
-from typing import Awaitable, Callable
+from typing import Awaitable, Callable, Literal
 
-from fastapi import Body, FastAPI, Header, Request
+from fastapi import Body, FastAPI, Header, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
@@ -41,6 +41,15 @@ from backend.app.services.in_memory import (
     InMemoryResolveService,
     RefundValidationError,
 )
+from backend.app.api.staff_models import (
+    OperationsSummaryResponse,
+    PolicyDocumentResponse,
+    PolicyListResponse,
+    PolicySectionResponse,
+    WorkspaceSettingsResponse,
+    WorkspaceTeamResponse,
+)
+from backend.app.rag.corpus import get_policy_corpus
 from backend.app.rag.pgvector_store import PgVectorPolicyRetriever
 from backend.app.rag.semantic import SentenceTransformerEmbeddingProvider
 from backend.app.commerce import CommerceRepository
@@ -110,6 +119,54 @@ def _configured_policy_response_provider() -> PolicyAnswerProvider | None:
     return LocalTransformersPolicyAnswerProvider(
         model_name,
         timeout_seconds=timeout_seconds,
+    )
+
+
+def _policy_response(record) -> PolicySectionResponse:
+    return PolicySectionResponse(
+        document_id=record.document_id,
+        document_version=record.document_version,
+        section=record.section,
+        release_id=record.release_id,
+        status=record.status,
+        visibility=record.visibility,
+        text=record.text,
+    )
+
+
+def _matching_policy_records(
+    *,
+    query: str | None,
+    status: str | None,
+    visibility: str | None,
+):
+    normalized_query = (query or "").strip().casefold()
+    query_terms = normalized_query.split()
+    records = []
+    for record in get_policy_corpus():
+        if status is not None and record.status != status:
+            continue
+        if visibility is not None and record.visibility != visibility:
+            continue
+        searchable = " ".join(
+            (
+                record.document_id,
+                record.document_version,
+                record.section,
+                record.release_id,
+                record.text,
+            )
+        ).casefold()
+        if query_terms and not all(term in searchable for term in query_terms):
+            continue
+        records.append(record)
+    return sorted(
+        records,
+        key=lambda record: (
+            record.document_id,
+            record.document_version,
+            record.section,
+        ),
     )
 
 
@@ -245,6 +302,95 @@ def create_app(
         if actor is None:
             return _error(401, UNAUTHENTICATED["code"], UNAUTHENTICATED["message"])
         return actor
+
+    @router.get("/ops/summary", response_model=OperationsSummaryResponse)
+    async def operations_summary(authorization: str | None = Header(default=None)):
+        actor = current_actor(authorization)
+        if actor is None:
+            return _error(401, UNAUTHENTICATED["code"], UNAUTHENTICATED["message"])
+        try:
+            return service.operations_summary(actor)
+        except ForbiddenOperation as exc:
+            return _error(403, "forbidden", str(exc))
+
+    @router.get("/knowledge/policies", response_model=PolicyListResponse)
+    async def list_knowledge_policies(
+        q: str | None = Query(default=None, max_length=200),
+        status: Literal["draft", "unpublished", "published"] | None = None,
+        visibility: Literal["public", "internal"] | None = None,
+        authorization: str | None = Header(default=None),
+    ):
+        actor = current_actor(authorization)
+        if actor is None:
+            return _error(401, UNAUTHENTICATED["code"], UNAUTHENTICATED["message"])
+        if actor.role not in {"support_agent", "refund_approver", "merchant_admin"}:
+            return _error(403, "forbidden", "knowledge access requires a staff role")
+        records = _matching_policy_records(
+            query=q,
+            status=status,
+            visibility=visibility,
+        )
+        return PolicyListResponse(
+            policies=[_policy_response(record) for record in records]
+        )
+
+    @router.get(
+        "/knowledge/policies/{document_id}",
+        response_model=PolicyDocumentResponse,
+    )
+    async def get_knowledge_policy(
+        document_id: str,
+        version: str | None = Query(default=None, min_length=1, max_length=64),
+        authorization: str | None = Header(default=None),
+    ):
+        actor = current_actor(authorization)
+        if actor is None:
+            return _error(401, UNAUTHENTICATED["code"], UNAUTHENTICATED["message"])
+        if actor.role not in {"support_agent", "refund_approver", "merchant_admin"}:
+            return _error(403, "forbidden", "knowledge access requires a staff role")
+        records = [
+            record
+            for record in get_policy_corpus()
+            if record.document_id == document_id
+            and (version is None or record.document_version == version)
+        ]
+        if not records:
+            return _error(404, "policy_not_found", "The requested policy was not found.")
+        records.sort(key=lambda record: (record.document_version, record.section))
+        return PolicyDocumentResponse(
+            document_id=document_id,
+            policies=[_policy_response(record) for record in records],
+        )
+
+    @router.get("/workspace/team", response_model=WorkspaceTeamResponse)
+    async def workspace_team(authorization: str | None = Header(default=None)):
+        actor = current_actor(authorization)
+        if actor is None:
+            return _error(401, UNAUTHENTICATED["code"], UNAUTHENTICATED["message"])
+        try:
+            return WorkspaceTeamResponse(team=service.workspace_team(actor))
+        except ForbiddenOperation as exc:
+            return _error(403, "forbidden", str(exc))
+
+    @router.get("/workspace/settings", response_model=WorkspaceSettingsResponse)
+    async def workspace_settings(authorization: str | None = Header(default=None)):
+        actor = current_actor(authorization)
+        if actor is None:
+            return _error(401, UNAUTHENTICATED["code"], UNAUTHENTICATED["message"])
+        if actor.role != "merchant_admin":
+            return _error(403, "forbidden", "workspace settings require merchant_admin")
+        return WorkspaceSettingsResponse(
+            merchant_name="ResolveAI Demo Merchant",
+            policy_source="POLICY_CORPUS",
+            policy_retrieval_mode=(
+                "semantic" if configured_policy_retriever is not None else "lexical"
+            ),
+            response_generation_mode=(
+                "model" if configured_response_provider is not None else "deterministic"
+            ),
+            database_ready=service.database_ready(),
+            commerce_database_configured=configured_commerce_repository is not None,
+        )
 
     @router.get("/orders/{order_id}", response_model=OrderSummary)
     async def get_order(order_id: str, authorization: str | None = Header(default=None)):
