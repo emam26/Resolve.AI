@@ -1,0 +1,4 @@
+# Optional local-only load/stress/soak verification.  This is not a runtime
+# application dependency and must be installed separately when load tests are
+# intentionally run.
+locust>=2.31,<3
