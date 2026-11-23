@@ -224,6 +224,30 @@ def test_postgres_threshold_excludes_below_minimum_score(pg_retriever) -> None:
         retriever.close()
 
 
+def test_postgres_raw_candidates_keep_publication_and_audience_filters(
+    pg_retriever,
+) -> None:
+    customer_results = pg_retriever.retrieve_published_policy_candidates(
+        "shipment delayed", audience="customer", top_k=10
+    )
+    staff_results = pg_retriever.retrieve_published_policy_candidates(
+        "refund review", audience="support_agent", top_k=10
+    )
+
+    assert customer_results
+    assert all(item.status == "published" for item in customer_results)
+    assert all(item.visibility == "public" for item in customer_results)
+    assert not any(
+        item.document_id == "delivery-policy" and item.document_version == "v1"
+        for item in customer_results
+    )
+    assert any(
+        item.document_id == "refund-review-policy" and item.visibility == "internal"
+        for item in staff_results
+    )
+    assert all(item.status == "published" for item in staff_results)
+
+
 def test_postgres_equal_scores_use_stable_metadata_order(pg_retriever) -> None:
     database_url = os.environ["RESOLVEAI_TEST_POSTGRES_URL"]
     engine = create_engine(database_url, future=True)

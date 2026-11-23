@@ -78,6 +78,42 @@ class PgVectorPolicyRetriever:
         audience: PolicyAudience = "customer",
         top_k: int = 3,
     ) -> list[PolicyEvidence]:
+        return self._retrieve(
+            query,
+            audience=audience,
+            top_k=top_k,
+            minimum_score=self._minimum_score,
+        )
+
+    def retrieve_published_policy_candidates(
+        self,
+        query: str,
+        audience: PolicyAudience = "customer",
+        top_k: int = 3,
+    ) -> list[PolicyEvidence]:
+        """Return ranked, access-filtered candidates before the 0.60 gate.
+
+        This is intentionally not the regular retrieval contract.  The
+        evaluation layer uses it to distinguish rank quality from the answer
+        gate; publication and audience filtering remain enforced by the SQL
+        query itself.
+        """
+
+        return self._retrieve(
+            query,
+            audience=audience,
+            top_k=top_k,
+            minimum_score=-1.0,
+        )
+
+    def _retrieve(
+        self,
+        query: str,
+        *,
+        audience: PolicyAudience,
+        top_k: int,
+        minimum_score: float,
+    ) -> list[PolicyEvidence]:
         if not query.strip():
             return []
         query_vectors = self._embedding_provider.embed([query])
@@ -88,7 +124,7 @@ class PgVectorPolicyRetriever:
             query_embedding,
             audience=audience,
             top_k=top_k,
-            minimum_score=self._minimum_score,
+            minimum_score=minimum_score,
         )
         with self._session_factory() as session:
             rows = session.execute(statement).all()
@@ -96,7 +132,7 @@ class PgVectorPolicyRetriever:
             policy_evidence_from_row(
                 row,
                 cosine_distance=float(distance),
-                minimum_score=self._minimum_score,
+                minimum_score=minimum_score,
             )
             for row, distance in rows
         ]

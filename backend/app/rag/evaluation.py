@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Sequence
+from statistics import mean
+from typing import TYPE_CHECKING, Protocol, Sequence
 
 from pydantic import BaseModel, ConfigDict
 
 from .corpus import POLICY_CORPUS
 from .models import PolicyAudience, PolicyEvidence, PolicyRecord
 from .retrieval import retrieve_published_policy
+from .semantic import is_sufficient_semantic_match
 
 if TYPE_CHECKING:
     from backend.app.ai.answer import PolicyRetriever
@@ -241,12 +243,56 @@ class RetrievalEvaluationReport(BaseModel):
 
         return {
             "query_count": self.query_count,
+            "accepted_evidence_recall_at_3": self.recall_at_3,
             "Recall@3": self.recall_at_3,
             "wrong_version_exposure": self.wrong_version_exposure,
             "citation_visibility_accuracy": self.citation_visibility_accuracy,
             "unsupported_answer_behavior": self.unsupported_answer_behavior,
             "cases": [case.model_dump(mode="json") for case in self.cases],
         }
+
+
+class RawCandidatePolicyRetriever(Protocol):
+    """Semantic retriever boundary that exposes access-filtered raw ranking."""
+
+    def retrieve_published_policy_candidates(
+        self,
+        query: str,
+        audience: PolicyAudience = "customer",
+        top_k: int = 3,
+    ) -> Sequence[PolicyEvidence]:
+        """Return ranked candidates before the semantic confidence gate."""
+
+
+class RawRankingCaseResult(BaseModel):
+    """Ranking and 0.60-gate facts, before answer evidence is accepted."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    label: str
+    expected_rank: int | None
+    top_similarity_score: float | None
+    semantic_gate_accepted: bool
+    citation_access_control_valid: bool
+    wrong_version_exposed: bool
+
+
+class RawRankingEvaluationReport(BaseModel):
+    """Keep raw semantic ranking distinct from answer-evidence acceptance."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    query_count: int
+    supported_query_count: int
+    raw_recall_at_3: float
+    raw_mrr: float
+    supported_semantic_gate_acceptance: float
+    citation_access_control_accuracy: float
+    wrong_version_exposure: float
+    cases: list[RawRankingCaseResult]
+
+    def as_dict(self) -> dict[str, object]:
+        return self.model_dump(mode="json")
 
 
 class AnswerContractCaseResult(BaseModel):
@@ -256,7 +302,9 @@ class AnswerContractCaseResult(BaseModel):
 
     label: str
     answer_contract_valid: bool
+    evidence_sufficient: bool
     citation_access_control_valid: bool
+    evidence_access_control_valid: bool
     wrong_version_exposed: bool
     retrieval_mode: str
 
@@ -270,7 +318,9 @@ class AnswerContractEvaluationReport(BaseModel):
     supported_query_count: int
     supported_answer_accuracy: float
     unsupported_answer_behavior: float
+    unsupported_false_acceptance_rate: float
     citation_access_control_accuracy: float
+    evidence_access_control_accuracy: float
     wrong_version_exposure: float
     cases: list[AnswerContractCaseResult]
 
@@ -310,17 +360,130 @@ def _matches_expected(evidence: PolicyEvidence, case: EvaluationCase) -> bool:
     )
 
 
+def _expected_rank(
+    evidence: Sequence[PolicyEvidence], case: EvaluationCase
+) -> int | None:
+    if case.expected_document_id is None:
+        return None
+    for index, item in enumerate(evidence[:3], start=1):
+        if _matches_expected(item, case) and _visibility_valid(item, case.audience):
+            return index
+    return None
+
+
+def _wrong_version_exposed(
+    evidence: Sequence[PolicyEvidence], case: EvaluationCase
+) -> bool:
+    return any(
+        (
+            case.forbidden_document_id is not None
+            and item.document_id == case.forbidden_document_id
+        )
+        or (
+            case.expected_document_id is not None
+            and case.forbidden_version is not None
+            and item.document_id == case.expected_document_id
+            and item.document_version == case.forbidden_version
+        )
+        for item in evidence
+    )
+
+
+def _citation_access_control_valid(
+    evidence: Sequence[PolicyEvidence], audience: PolicyAudience
+) -> bool:
+    return all(
+        item.status == "published"
+        and bool(item.release_id)
+        and bool(item.document_version)
+        and bool(item.section)
+        and _visibility_valid(item, audience)
+        for item in evidence
+    )
+
+
+def evaluate_raw_semantic_ranking(
+    cases: Sequence[EvaluationCase] = DEFAULT_EVALUATION_CASES,
+    *,
+    policy_retriever: RawCandidatePolicyRetriever,
+) -> RawRankingEvaluationReport:
+    """Measure raw semantic top-3 ranking before the answer confidence gate."""
+
+    if not cases:
+        raise ValueError("at least one evaluation case is required")
+
+    results: list[RawRankingCaseResult] = []
+    supported_total = 0
+    recall_hits = 0
+    reciprocal_ranks: list[float] = []
+    supported_gate_accepts = 0
+    citation_valid_count = 0
+    version_sensitive_count = 0
+    wrong_version_count = 0
+
+    for case in cases:
+        retrieved = list(
+            policy_retriever.retrieve_published_policy_candidates(
+                case.query,
+                audience=case.audience,
+                top_k=3,
+            )
+        )
+        rank = _expected_rank(retrieved, case)
+        if case.expected_document_id is not None:
+            supported_total += 1
+            recall_hits += int(rank is not None)
+            reciprocal_ranks.append(1.0 / rank if rank is not None else 0.0)
+            supported_gate_accepts += int(is_sufficient_semantic_match(retrieved))
+
+        citation_valid = _citation_access_control_valid(retrieved, case.audience)
+        citation_valid_count += int(citation_valid)
+        wrong_version = _wrong_version_exposed(retrieved, case)
+        if case.forbidden_version is not None or case.forbidden_document_id is not None:
+            version_sensitive_count += 1
+            wrong_version_count += int(wrong_version)
+
+        results.append(
+            RawRankingCaseResult(
+                label=case.label,
+                expected_rank=rank,
+                top_similarity_score=(retrieved[0].score if retrieved else None),
+                semantic_gate_accepted=is_sufficient_semantic_match(retrieved),
+                citation_access_control_valid=citation_valid,
+                wrong_version_exposed=wrong_version,
+            )
+        )
+
+    return RawRankingEvaluationReport(
+        query_count=len(cases),
+        supported_query_count=supported_total,
+        raw_recall_at_3=recall_hits / supported_total if supported_total else 0.0,
+        raw_mrr=mean(reciprocal_ranks) if reciprocal_ranks else 0.0,
+        supported_semantic_gate_acceptance=(
+            supported_gate_accepts / supported_total if supported_total else 0.0
+        ),
+        citation_access_control_accuracy=citation_valid_count / len(cases),
+        wrong_version_exposure=(
+            wrong_version_count / version_sensitive_count
+            if version_sensitive_count
+            else 0.0
+        ),
+        cases=results,
+    )
+
+
 def evaluate_policy_retrieval(
     cases: Sequence[EvaluationCase] = DEFAULT_EVALUATION_CASES,
     *,
     corpus: Sequence[PolicyRecord] = POLICY_CORPUS,
     policy_retriever: PolicyRetriever | None = None,
 ) -> RetrievalEvaluationReport:
-    """Evaluate retrieval and grounding with lexical or injected retrieval.
+    """Evaluate thresholded retrieval and resulting answer contract.
 
     The default remains the deterministic lexical baseline. Supplying the
     application retrieval boundary lets the same frozen labels evaluate a
     semantic/pgvector backend without duplicating policy-access assertions.
+    For pre-gate ranking, use :func:`evaluate_raw_semantic_ranking` instead.
     """
 
     if not cases:
@@ -358,32 +521,12 @@ def evaluate_policy_retrieval(
             recall_total += 1
             recall_hits += int(expected_hit)
 
-        wrong_version = any(
-            (
-                case.forbidden_document_id is not None
-                and evidence.document_id == case.forbidden_document_id
-            )
-            or (
-                case.expected_document_id is not None
-                and case.forbidden_version is not None
-                and evidence.document_id == case.expected_document_id
-                and evidence.document_version == case.forbidden_version
-            )
-            for evidence in retrieved
-        )
+        wrong_version = _wrong_version_exposed(retrieved, case)
         if case.forbidden_version is not None or case.forbidden_document_id is not None:
             version_sensitive_count += 1
             wrong_version_count += int(wrong_version)
 
-        citation_valid = all(
-            evidence.status == "published"
-            and
-            evidence.release_id
-            and evidence.document_version
-            and evidence.section
-            and _visibility_valid(evidence, case.audience)
-            for evidence in retrieved
-        )
+        citation_valid = _citation_access_control_valid(retrieved, case.audience)
         if case.expected_document_id is not None:
             citation_valid = citation_valid and expected_hit
         answer = answer_from_published_policy(
@@ -479,7 +622,9 @@ def evaluate_answer_contract(
     supported_valid = 0
     unsupported_total = 0
     unsupported_valid = 0
+    unsupported_false_accepts = 0
     citation_valid_count = 0
+    evidence_access_valid_count = 0
     wrong_version_count = 0
     version_sensitive_count = 0
 
@@ -498,6 +643,12 @@ def evaluate_answer_contract(
             and bool(evidence.release_id)
             and _visibility_valid(evidence, case.audience)
             for evidence in answer.evidence
+        )
+        evidence_sufficient = (
+            answer.grounded
+            and answer.answer is not None
+            and not answer.needs_handoff
+            and bool(answer.evidence)
         )
         if case.expect_supported_answer:
             supported_total += 1
@@ -520,6 +671,9 @@ def evaluate_answer_contract(
             )
             unsupported_valid += int(answer_valid)
             citation_valid = answer_valid and evidence_valid
+            unsupported_false_accepts += int(
+                answer.grounded or answer.answer is not None or bool(answer.evidence)
+            )
 
         wrong_version = any(
             (
@@ -537,11 +691,14 @@ def evaluate_answer_contract(
             version_sensitive_count += 1
             wrong_version_count += int(wrong_version)
         citation_valid_count += int(citation_valid)
+        evidence_access_valid_count += int(evidence_valid)
         results.append(
             AnswerContractCaseResult(
                 label=case.label,
                 answer_contract_valid=answer_valid,
+                evidence_sufficient=evidence_sufficient,
                 citation_access_control_valid=citation_valid,
+                evidence_access_control_valid=evidence_valid,
                 wrong_version_exposed=wrong_version,
                 retrieval_mode=answer.retrieval_mode,
             )
@@ -556,7 +713,11 @@ def evaluate_answer_contract(
         unsupported_answer_behavior=(
             unsupported_valid / unsupported_total if unsupported_total else 0.0
         ),
+        unsupported_false_acceptance_rate=(
+            unsupported_false_accepts / unsupported_total if unsupported_total else 0.0
+        ),
         citation_access_control_accuracy=citation_valid_count / len(cases),
+        evidence_access_control_accuracy=evidence_access_valid_count / len(cases),
         wrong_version_exposure=(
             wrong_version_count / version_sensitive_count
             if version_sensitive_count
@@ -572,7 +733,11 @@ __all__ = [
     "DEFAULT_EVALUATION_CASES",
     "EvaluationCase",
     "M11A_EVALUATION_CASES",
+    "RawCandidatePolicyRetriever",
+    "RawRankingCaseResult",
+    "RawRankingEvaluationReport",
     "RetrievalEvaluationReport",
+    "evaluate_raw_semantic_ranking",
     "evaluate_policy_retrieval",
     "evaluate_answer_contract",
 ]

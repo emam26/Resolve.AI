@@ -2,6 +2,7 @@ from backend.app.rag import (
     DEFAULT_EVALUATION_CASES,
     EvaluationCase,
     PolicyEvidence,
+    evaluate_raw_semantic_ranking,
     evaluate_policy_retrieval,
     retrieve_published_policy,
 )
@@ -216,6 +217,69 @@ def test_evaluation_uses_injected_retriever_for_semantic_path() -> None:
     ]
 
 
+def test_raw_semantic_evaluation_keeps_ranking_separate_from_gate_acceptance() -> None:
+    class RawCandidateRetriever:
+        def retrieve_published_policy_candidates(
+            self, query: str, audience: str = "customer", top_k: int = 3
+        ) -> list[PolicyEvidence]:
+            del audience, top_k
+            if query == "supported query":
+                return [
+                    PolicyEvidence(
+                        document_id="delivery-policy",
+                        document_version="v2",
+                        section="Delayed shipments",
+                        release_id="release_2026_11_01",
+                        visibility="public",
+                        score=0.54,
+                        text="grounded delivery evidence",
+                    )
+                ]
+            return [
+                PolicyEvidence(
+                    document_id="delivery-policy",
+                    document_version="v2",
+                    section="Delayed shipments",
+                    release_id="release_2026_11_01",
+                    visibility="public",
+                    score=0.40,
+                    text="weak candidate",
+                )
+            ]
+
+    report = evaluate_raw_semantic_ranking(
+        cases=(
+            EvaluationCase(
+                label="supported",
+                query="supported query",
+                audience="customer",
+                expected_document_id="delivery-policy",
+                expected_version="v2",
+                expected_section="Delayed shipments",
+                expect_supported_answer=True,
+            ),
+            EvaluationCase(
+                label="unsupported",
+                query="unsupported query",
+                audience="customer",
+                expected_document_id=None,
+                expected_version=None,
+                expected_section=None,
+                expect_supported_answer=False,
+            ),
+        ),
+        policy_retriever=RawCandidateRetriever(),
+    )
+
+    assert report.raw_recall_at_3 == 1.0
+    assert report.raw_mrr == 1.0
+    assert report.supported_semantic_gate_acceptance == 0.0
+    assert report.citation_access_control_accuracy == 1.0
+    assert report.cases[0].expected_rank == 1
+    assert report.cases[0].top_similarity_score == 0.54
+    assert report.cases[0].semantic_gate_accepted is False
+
+
 def test_evaluation_rejects_unpublished_and_internal_injected_evidence() -> None:
     class UnsafeRetriever:
         def retrieve_published_policy(
@@ -356,3 +420,43 @@ def test_answer_contract_evaluation_measures_actual_semantic_result() -> None:
     assert report.supported_answer_accuracy == 1.0
     assert report.citation_access_control_accuracy == 1.0
     assert report.cases[0].retrieval_mode == "semantic"
+
+
+def test_answer_contract_reports_unsupported_false_acceptance_separately() -> None:
+    class UnsafeRetriever:
+        def retrieve_published_policy(
+            self, query: str, audience: str = "customer", top_k: int = 3
+        ) -> list[PolicyEvidence]:
+            del query, audience, top_k
+            return [
+                PolicyEvidence(
+                    document_id="returns-policy",
+                    document_version="v1",
+                    section="Return window",
+                    release_id="release_2026_11_01",
+                    visibility="public",
+                    score=0.9,
+                    text="A return request must be submitted within 30 calendar days after delivery.",
+                )
+            ]
+
+    report = evaluate_answer_contract(
+        cases=(
+            EvaluationCase(
+                label="unsupported",
+                query="How do I change my account password?",
+                audience="customer",
+                expected_document_id=None,
+                expected_version=None,
+                expected_section=None,
+                expect_supported_answer=False,
+            ),
+        ),
+        policy_retriever=UnsafeRetriever(),
+    )
+
+    assert report.unsupported_answer_behavior == 0.0
+    assert report.unsupported_false_acceptance_rate == 1.0
+    assert report.citation_access_control_accuracy == 0.0
+    assert report.evidence_access_control_accuracy == 1.0
+    assert report.cases[0].evidence_sufficient is True
