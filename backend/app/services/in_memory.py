@@ -49,8 +49,68 @@ class _DemoInvestigationModel:
 
     def classify(self, query: str) -> ModelDecision:
         normalized = query.casefold()
+        has_policy_context = any(
+            term in normalized
+            for term in ("policy", "eligible", "eligibility", "return window", "published")
+        )
+        has_order_context = any(
+            term in normalized
+            for term in (
+                "order", "shipment", "delivery", "paid", "payment", "refund",
+                "return", "status", "total",
+            )
+        )
+        if any(
+            phrase in normalized
+            for phrase in (
+                "change the order", "override the recorded", "execute the payment",
+                "issue money", "approve the refund", "refund this order immediately",
+                "create a refund", "cancel the order and",
+            )
+        ):
+            return ModelDecision(
+                intent="refund_request" if "refund" in normalized else "unknown"
+            )
+        if has_policy_context and has_order_context:
+            return ModelDecision(intent="database_policy_question")
+        if "refund" in normalized and any(
+            term in normalized
+            for term in ("status", "review", "approved", "pending", "decision", "state", "happened")
+        ):
+            return ModelDecision(intent="refund_status")
+        if "order" in normalized and any(
+            term in normalized
+            for term in (
+                "status", "delayed", "processing", "delivered", "cancelled",
+                "in transit", "happened", "still show",
+            )
+        ) and not any(
+            term in normalized for term in ("payment", "paid", "pay", "amount", "total")
+        ):
+            return ModelDecision(intent="order_status")
+        if any(
+            term in normalized
+            for term in ("authoritative", "outdated", "older", "conflict", "conflicting", "stale", "latest", "stored")
+        ) and any(term in normalized for term in ("order", "status", "state", "carrier", "message", "timestamp", "estimate", "tracking", "shipment")):
+            return ModelDecision(intent="order_status")
         if "refund" in normalized:
             return ModelDecision(intent="refund_request")
+        if "status" in normalized and any(
+            term in normalized for term in ("order", "shipment", "delivery")
+        ):
+            return ModelDecision(intent="order_status")
+        if any(
+            term in normalized
+            for term in ("total", "payment", "paid", "pay", "charged", "amount")
+        ):
+            return ModelDecision(intent="payment_total")
+        if any(
+            term in normalized
+            for term in (
+                "tracking", "carrier", "shipped", "sent", "delivered", "arrive", "promised", "expected", "estimate", "delivery information", "delivery details", "delivery date", "delivery state", "shipment details", "shipment reference",
+            )
+        ):
+            return ModelDecision(intent="shipment_tracking")
         if any(
             phrase in normalized
             for phrase in (
@@ -60,13 +120,30 @@ class _DemoInvestigationModel:
                 "tracking",
                 "delivery status",
                 "shipment status",
+                "current status",
+                "order details",
+                "order facts",
+                "foreign order",
             )
         ):
+            return ModelDecision(intent="order_status")
+        if any(
+            term in normalized
+            for term in (
+                "where", "stands", "happening", "current", "latest",
+                "other order", "second order", "order two",
+            )
+        ) and "order" in normalized:
             return ModelDecision(intent="order_status")
         # Policy retrieval is the safe default for non-transactional
         # questions.  The grounded-answer layer hands off when evidence is
         # insufficient rather than inventing a response.
         return ModelDecision(intent="policy_question")
+
+
+# Public only for deterministic local evaluation; production model selection
+# remains dependency-injected through ``InMemoryResolveService``.
+DemoInvestigationModel = _DemoInvestigationModel
 
 
 class _AuthorizedOrderFactsTool:
@@ -81,6 +158,16 @@ class _AuthorizedOrderFactsTool:
         if order is None:
             return None
         summary = order.summary
+        refund_state = order.refund_state
+        if refund_state is None:
+            refund_state = next(
+                (
+                    refund.state
+                    for refund in self._service._refund_repository.list_all()
+                    if refund.order_id == summary.order_id
+                ),
+                None,
+            )
         return OrderFacts(
             order_id=summary.order_id,
             status=summary.status,
@@ -90,6 +177,20 @@ class _AuthorizedOrderFactsTool:
                 if summary.estimated_delivery_date is None
                 else summary.estimated_delivery_date.isoformat()
             ),
+            total_cents=order.total_cents,
+            payment_amount_cents=order.payment_amount_cents,
+            payment_status=(
+                None
+                if order.payment_status is None
+                else {"completed": "paid", "failed": "failed"}.get(
+                    order.payment_status, summary.payment_status
+                )
+            ),
+            payment_method=order.payment_method,
+            tracking_number=order.tracking_number,
+            shipped_at=(None if order.shipped_at is None else order.shipped_at.isoformat()),
+            delivered_at=(None if order.delivered_at is None else order.delivered_at.isoformat()),
+            refund_state=refund_state,
         )
 
 
@@ -132,6 +233,16 @@ class _OrderRecord:
 class _AuthorizedOrder:
     summary: OrderSummary
     max_refundable_cents: int
+    total_cents: int | None = None
+    payment_amount_cents: int | None = None
+    payment_status: str | None = None
+    payment_method: str | None = None
+    tracking_number: str | None = None
+    shipped_at: datetime | None = None
+    promised_delivery_at: datetime | None = None
+    delivered_at: datetime | None = None
+    created_at: datetime | None = None
+    refund_state: str | None = None
 
 
 class InMemoryResolveService:
@@ -438,6 +549,16 @@ class InMemoryResolveService:
                 return _AuthorizedOrder(
                     summary=imported.summary,
                     max_refundable_cents=imported.max_refundable_cents,
+                    total_cents=imported.total_cents,
+                    payment_amount_cents=imported.payment_amount_cents,
+                    payment_status=imported.payment_status,
+                    payment_method=imported.payment_method,
+                    tracking_number=imported.tracking_number,
+                    shipped_at=imported.shipped_at,
+                    promised_delivery_at=imported.promised_delivery_at,
+                    delivered_at=imported.delivered_at,
+                    created_at=imported.created_at,
+                    refund_state=imported.refund_state,
                 )
         record = self._orders.get(order_id)
         if record is None or record.owner_customer_id != customer_id:

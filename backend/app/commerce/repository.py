@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal, ROUND_HALF_UP
 
 from sqlalchemy import Engine, and_, create_engine, select, text
@@ -15,7 +15,9 @@ from .models import (
     commerce_demo_identities,
     commerce_order_statuses,
     commerce_orders,
+    commerce_payment_methods,
     commerce_payments,
+    commerce_refund_scenarios,
     commerce_shipments,
     commerce_support_cases,
 )
@@ -29,6 +31,16 @@ class CommerceOrder:
     summary: OrderSummary
     max_refundable_cents: int
     source_order_id: int
+    total_cents: int
+    payment_amount_cents: int | None
+    payment_status: str | None
+    payment_method: str | None
+    tracking_number: str | None
+    shipped_at: datetime | None
+    promised_delivery_at: datetime | None
+    delivered_at: datetime | None
+    created_at: datetime
+    refund_state: str | None
 
 
 class CommerceRepository:
@@ -49,11 +61,16 @@ class CommerceRepository:
                 commerce_orders.c.source_order_id,
                 commerce_orders.c.public_order_id,
                 commerce_orders.c.total,
+                commerce_orders.c.created_at,
                 commerce_order_statuses.c.status_name.label("order_status_name"),
                 commerce_payments.c.status.label("payment_status_name"),
+                commerce_payments.c.amount.label("payment_amount"),
+                commerce_payment_methods.c.name.label("payment_method_name"),
+                commerce_shipments.c.tracking_number,
                 commerce_shipments.c.shipped_at,
                 commerce_shipments.c.promised_delivery_at,
                 commerce_shipments.c.delivered_at,
+                commerce_refund_scenarios.c.state.label("refund_state"),
                 active_case.c.scenario_type.label("active_scenario_type"),
             )
             .select_from(
@@ -73,8 +90,18 @@ class CommerceRepository:
                     == commerce_orders.c.source_order_id,
                 )
                 .outerjoin(
+                    commerce_payment_methods,
+                    commerce_payment_methods.c.source_payment_method_id
+                    == commerce_payments.c.source_payment_method_id,
+                )
+                .outerjoin(
                     commerce_shipments,
                     commerce_shipments.c.source_order_id
+                    == commerce_orders.c.source_order_id,
+                )
+                .outerjoin(
+                    commerce_refund_scenarios,
+                    commerce_refund_scenarios.c.source_order_id
                     == commerce_orders.c.source_order_id,
                 )
                 .outerjoin(
@@ -132,6 +159,20 @@ def _commerce_order_from_row(row) -> CommerceOrder:
         summary=summary,
         max_refundable_cents=max_refundable_cents,
         source_order_id=int(row["source_order_id"]),
+        total_cents=total_cents,
+        payment_amount_cents=(
+            None
+            if row["payment_amount"] is None
+            else _money_to_cents(row["payment_amount"])
+        ),
+        payment_status=row["payment_status_name"],
+        payment_method=row["payment_method_name"],
+        tracking_number=row["tracking_number"],
+        shipped_at=row["shipped_at"],
+        promised_delivery_at=row["promised_delivery_at"],
+        delivered_at=row["delivered_at"],
+        created_at=row["created_at"],
+        refund_state=row["refund_state"],
     )
 
 

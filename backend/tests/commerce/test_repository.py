@@ -18,6 +18,7 @@ from backend.app.commerce.models import (
     commerce_orders,
     commerce_payment_methods,
     commerce_payments,
+    commerce_refund_scenarios,
     commerce_products,
     commerce_shipments,
     commerce_shipping_methods,
@@ -222,6 +223,81 @@ def test_repository_maps_only_authorized_imported_orders() -> None:
     assert owned.summary.shipment_status == "delayed"
     assert owned.max_refundable_cents == 8600
     assert repository.order_for_customer("fixture_order_70002", "customer_001") is None
+
+
+def test_repository_projects_typed_structured_order_facts() -> None:
+    repository = _repository_with_imported_order()
+
+    # Exercise Decimal conversion at the repository boundary rather than
+    # relying on a database driver's representation of NUMERIC values.
+    with repository._engine.begin() as connection:  # noqa: SLF001 - focused fixture
+        connection.execute(
+            commerce_refund_scenarios.insert(),
+            [{
+                "refund_scenario_id": "fixture-refund-1",
+                "case_id": "case-delayed-delivery-001",
+                "source_order_id": 70001,
+                "amount_cents": 1000,
+                "state": "PENDING_REVIEW",
+                "idempotency_key": "fixture-refund-key-1",
+                "provenance": "test",
+            }],
+        )
+        connection.execute(
+            commerce_orders.update()
+            .where(commerce_orders.c.source_order_id == 70001)
+            .values(total=Decimal("86.01"))
+        )
+        connection.execute(
+            commerce_payments.update()
+            .where(commerce_payments.c.source_order_id == 70001)
+            .values(amount=Decimal("85.99"))
+        )
+
+    order = repository.order_for_customer("fixture_order_70001", "customer_001")
+
+    assert order is not None
+    assert order.total_cents == 8601
+    assert order.payment_amount_cents == 8599
+    assert order.payment_status == "completed"
+    assert order.payment_method == "credit_card"
+    assert order.tracking_number == "sample-tracking-1"
+    assert order.shipped_at == datetime(2026, 1, 2)
+    assert order.promised_delivery_at == datetime(2026, 1, 8)
+    assert order.delivered_at == datetime(2026, 1, 9)
+    assert order.created_at == datetime(2025, 12, 31)
+    assert order.refund_state == "PENDING_REVIEW"
+
+
+def test_repository_keeps_missing_payment_and_shipment_unavailable() -> None:
+    repository = _repository_with_imported_order()
+
+    with repository._engine.begin() as connection:  # noqa: SLF001 - focused fixture
+        connection.execute(
+            commerce_payments.delete().where(
+                commerce_payments.c.source_order_id == 70001
+            )
+        )
+        connection.execute(
+            commerce_shipments.delete().where(
+                commerce_shipments.c.source_order_id == 70001
+            )
+        )
+
+    order = repository.order_for_customer("fixture_order_70001", "customer_001")
+
+    assert order is not None
+    assert order.total_cents == 8600
+    assert order.payment_amount_cents is None
+    assert order.payment_status is None
+    assert order.payment_method is None
+    assert order.tracking_number is None
+    assert order.shipped_at is None
+    assert order.promised_delivery_at is None
+    assert order.delivered_at is None
+    assert order.summary.payment_status == "pending"
+    assert order.summary.shipment_status == "not_shipped"
+    assert order.max_refundable_cents == 0
 
 
 def test_existing_api_workflow_uses_imported_order_without_weakening_refund_guards() -> None:

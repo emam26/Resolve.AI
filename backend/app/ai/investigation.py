@@ -27,10 +27,15 @@ from backend.app.ai.answer import PolicyRetriever, answer_from_published_policy
 
 InvestigationIntent = Literal[
     "order_status",
+    "payment_total",
+    "shipment_tracking",
+    "refund_status",
+    "database_policy_question",
     "policy_question",
     "refund_request",
     "unknown",
 ]
+RefundStatus = Literal["PENDING_REVIEW", "APPROVED_EXTERNAL_ACTION_REQUIRED", "REJECTED"]
 InvestigationOutcome = Literal["ANSWER", "HANDOFF"]
 RetrievalMode = Literal[
     "not_applicable",
@@ -49,6 +54,14 @@ class OrderFacts(BaseModel):
     status: OrderStatus
     shipment_status: ShipmentStatus
     estimated_delivery: str | None = None
+    total_cents: int | None = None
+    payment_amount_cents: int | None = None
+    payment_status: Literal["pending", "paid", "failed"] | None = None
+    payment_method: str | None = None
+    tracking_number: str | None = None
+    shipped_at: str | None = None
+    delivered_at: str | None = None
+    refund_state: RefundStatus | None = None
 
 
 class ModelDecision(BaseModel):
@@ -144,6 +157,8 @@ def _route_after_classify(state: _InvestigationState) -> str:
     intent = state.get("intent", "unknown")
     if intent == "order_status":
         return "fetch_order_facts"
+    if intent in {"payment_total", "shipment_tracking", "refund_status", "database_policy_question"}:
+        return "fetch_order_facts"
     if intent == "policy_question":
         return "answer_policy"
     return "handoff_intent"
@@ -190,6 +205,80 @@ def _answer_order(state: _InvestigationState) -> dict[str, object]:
         ),
         "trace": _trace(state, "answer_order"),
     }
+
+
+def _answer_structured(state: _InvestigationState) -> dict[str, object]:
+    facts = state.get("facts")
+    intent = state.get("intent")
+    reason: str | None = None
+    if facts is None:
+        reason = "order_facts_unavailable"
+    elif intent == "payment_total" and any(
+        term in state["query"].casefold()
+        for term in ("paid", "payment", "charged", "amount", "payment method")
+    ) and facts.payment_amount_cents is None and facts.payment_status is None:
+        reason = "order_facts_unavailable"
+    elif intent == "payment_total" and facts.total_cents is None:
+        reason = "order_facts_unavailable"
+    elif intent == "shipment_tracking":
+        normalized_query = state["query"].casefold()
+        needs_date = any(
+            term in normalized_query
+            for term in ("when", "date", "arrive", "delivered", "shipped", "delivery")
+        )
+        if (not facts.tracking_number) or (
+            needs_date
+            and not any(
+                (facts.estimated_delivery, facts.shipped_at, facts.delivered_at)
+            )
+        ):
+            reason = "order_facts_unavailable"
+    elif intent == "refund_status" and facts.refund_state is None:
+        reason = "order_facts_unavailable"
+    elif intent == "database_policy_question":
+        return _answer_database_policy(state)
+    else:
+        reason = None
+    if reason is not None:
+        return {"result": _handoff_result(state, reason, "answer_structured"), "trace": _trace(state, "answer_structured")}
+    if intent == "payment_total":
+        cents = facts.total_cents
+        amount = facts.payment_amount_cents or cents
+        answer = f"The total for order {facts.order_id} is ${cents // 100}.{cents % 100:02d}."
+        if facts.payment_amount_cents is not None:
+            answer += f" Recorded payment: ${amount // 100}.{amount % 100:02d}."
+        if facts.payment_status is not None:
+            answer += f" Payment status: {facts.payment_status}."
+        if facts.payment_method is not None:
+            answer += f" Payment method: {facts.payment_method}."
+    elif intent == "shipment_tracking":
+        answer = (
+            f"The tracking number for order {facts.order_id} is {facts.tracking_number}."
+            f" Shipment status: {facts.shipment_status}."
+        )
+        if facts.estimated_delivery:
+            answer += f" Estimated delivery: {facts.estimated_delivery}."
+        if facts.shipped_at:
+            answer += f" Shipped at: {facts.shipped_at}."
+        if facts.delivered_at:
+            answer += f" Delivered at: {facts.delivered_at}."
+    else:
+        answer = f"The refund status for order {facts.order_id} is {facts.refund_state}."
+    return {"result": InvestigationResult(outcome="ANSWER", answer=answer, evidence=[], handoff_reason=None, trace=_trace(state, "answer_structured")), "trace": _trace(state, "answer_structured")}
+
+
+def _answer_database_policy(state: _InvestigationState) -> dict[str, object]:
+    facts = state.get("facts")
+    grounded = answer_from_published_policy(state["query"], audience=state["audience"], policy_retriever=state.get("policy_retriever"), response_provider=state.get("response_provider"))
+    if facts is None:
+        reason = "order_facts_unavailable"
+    elif not grounded.grounded or grounded.answer is None:
+        reason = "insufficient_published_policy"
+    else:
+        result = InvestigationResult(outcome="ANSWER", answer=f"Order {facts.order_id} is {facts.status}; shipment is {facts.shipment_status}. {grounded.answer}", evidence=grounded.evidence, handoff_reason=None, trace=_trace(state, "answer_database_policy"), retrieval_mode=grounded.retrieval_mode, generation_mode=("model" if grounded.generation_mode == "model" else "deterministic"), citation_ids=grounded.citation_ids)
+        return {"result": result, "trace": _trace(state, "answer_database_policy")}
+    result = _handoff_result(state, reason, "answer_database_policy").model_copy(update={"retrieval_mode": grounded.retrieval_mode, "citation_ids": grounded.citation_ids})
+    return {"result": result, "trace": _trace(state, "answer_database_policy")}
 
 
 def _answer_policy(state: _InvestigationState) -> dict[str, object]:
@@ -246,6 +335,7 @@ def _build_graph():
     graph.add_node("classify", _classify)
     graph.add_node("fetch_order_facts", _fetch_order_facts)
     graph.add_node("answer_order", _answer_order)
+    graph.add_node("answer_structured", _answer_structured)
     graph.add_node("answer_policy", _answer_policy)
     graph.add_node("handoff_intent", _handoff_intent)
     graph.add_node("finish", _finish)
@@ -261,20 +351,11 @@ def _build_graph():
     )
     graph.add_conditional_edges(
         "fetch_order_facts",
-        lambda state: (
-            "finish"
-            if state.get("result") is not None
-            else "answer_order"
-            if state.get("facts") is not None
-            else "handoff_intent"
-        ),
-        {
-            "answer_order": "answer_order",
-            "finish": "finish",
-            "handoff_intent": "handoff_intent",
-        },
+        lambda state: "finish" if state.get("result") is not None else "answer_structured" if state.get("intent") != "order_status" and state.get("facts") is not None else "answer_order" if state.get("facts") is not None else "handoff_intent",
+        {"answer_order": "answer_order", "answer_structured": "answer_structured", "finish": "finish", "handoff_intent": "handoff_intent"},
     )
     graph.add_edge("answer_order", END)
+    graph.add_edge("answer_structured", END)
     graph.add_edge("answer_policy", END)
     graph.add_edge("handoff_intent", END)
     graph.add_edge("finish", END)
