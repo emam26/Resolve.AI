@@ -384,3 +384,62 @@ def test_refund_review_separates_roles_and_keeps_terminal_decisions_safe() -> No
     )
     _assert_error(rejected_after_approval, 409, "refund_state_conflict")
     assert "REFUNDED" not in approved.text
+
+
+def test_input_validation_rejects_invalid_shapes_without_side_effects() -> None:
+    client = TestClient(create_app())
+    customer = _login(client, "customer_001")
+    customer_headers = _headers(customer)
+
+    invalid_channel = client.post(
+        "/api/v1/conversations",
+        headers=customer_headers,
+        json={"channel": "email", "order_id": None},
+    )
+    _assert_error(invalid_channel, 422, "validation_error")
+
+    conversation_id = _create_conversation(client, customer)
+    blank_message = client.post(
+        f"/api/v1/conversations/{conversation_id}/messages",
+        headers=customer_headers,
+        json={"content": "   "},
+    )
+    _assert_error(blank_message, 422, "message_required")
+    transcript = client.get(
+        f"/api/v1/conversations/{conversation_id}", headers=customer_headers
+    )
+    assert transcript.status_code == 200
+    assert transcript.json()["messages"] == []
+
+
+def test_refund_validation_rejects_invalid_amount_and_blank_fields() -> None:
+    client = TestClient(create_app())
+    conversation_id, _, support = _human_active_conversation(client)
+    path = f"/api/v1/support/conversations/{conversation_id}/refunds"
+    support_headers = _headers(support)
+
+    for invalid_payload, expected_code in (
+        (
+            {"amount_cents": 0, "reason": "invalid", "idempotency_key": "zero"},
+            "validation_error",
+        ),
+        (
+            {"amount_cents": -1, "reason": "invalid", "idempotency_key": "negative"},
+            "validation_error",
+        ),
+        (
+            {"amount_cents": 100, "reason": "   ", "idempotency_key": "blank-reason"},
+            "refund_validation_error",
+        ),
+        (
+            {"amount_cents": 100, "reason": "invalid", "idempotency_key": "   "},
+            "refund_validation_error",
+        ),
+    ):
+        response = client.post(path, headers=support_headers, json=invalid_payload)
+        _assert_error(response, 422, expected_code)
+
+    approver = _login(client, "refund_approver_001")
+    refunds = client.get("/api/v1/refunds", headers=_headers(approver))
+    assert refunds.status_code == 200
+    assert refunds.json()["refunds"] == []

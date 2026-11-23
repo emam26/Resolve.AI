@@ -17,7 +17,7 @@ from sqlalchemy import create_engine, insert
 from sqlalchemy.exc import IntegrityError
 
 from backend.app.api import create_app
-from backend.app.db import ConversationRepository
+from backend.app.db import ConversationRepository, RefundRepository
 from backend.app.db.conversations import ConversationRow, MessageRow
 
 
@@ -170,6 +170,135 @@ def test_postgres_constraints_reject_invalid_state_and_orphan_message(
                 )
     finally:
         engine.dispose()
+
+
+def test_postgres_message_insert_rolls_back_after_constraint_failure(
+    postgres_url: str,
+) -> None:
+    repository = ConversationRepository(postgres_url)
+    conversation = repository.create_conversation(
+        owner_customer_id="customer_001",
+        channel="widget",
+        state="AI_ACTIVE",
+        order_id=None,
+        created_at=datetime.now(),
+    )
+
+    with pytest.raises(IntegrityError):
+        repository.append_message(
+            conversation.conversation_id,
+            author_type="untrusted_author",
+            content="must roll back",
+            created_at=datetime.now(),
+        )
+
+    restored = repository.get(conversation.conversation_id)
+    assert restored is not None
+    assert restored.messages == ()
+
+    appended = repository.append_message(
+        conversation.conversation_id,
+        author_type="customer",
+        content="valid after rollback",
+        created_at=datetime.now(),
+    )
+    assert appended is not None
+    assert [message.content for message in appended.messages] == [
+        "valid after rollback"
+    ]
+
+
+def test_postgres_resolution_serializes_against_customer_append(
+    postgres_url: str,
+) -> None:
+    repository = ConversationRepository(postgres_url)
+    conversation = repository.create_conversation(
+        owner_customer_id="customer_001",
+        channel="widget",
+        state="AI_ACTIVE",
+        order_id=None,
+        created_at=datetime.now(),
+    )
+    barrier = Barrier(2)
+
+    def append_customer_message():
+        barrier.wait()
+        return repository.append_message_unless_state(
+            conversation.conversation_id,
+            excluded_state="RESOLVED",
+            author_type="customer",
+            content="one serialized message",
+            created_at=datetime.now(),
+        )
+
+    def resolve_conversation():
+        barrier.wait()
+        return repository.transition(
+            conversation.conversation_id,
+            expected_state="AI_ACTIVE",
+            new_state="RESOLVED",
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        operations = (append_customer_message, resolve_conversation)
+        append_result, resolution_result = list(
+            executor.map(lambda operation: operation(), operations)
+        )
+
+    assert append_result is not None or resolution_result is not None
+    restored = repository.get(conversation.conversation_id)
+    assert restored is not None
+    assert restored.state == "RESOLVED"
+    assert len(restored.messages) <= 1
+    if append_result is None:
+        assert restored.messages == ()
+    else:
+        assert [message.content for message in restored.messages] == [
+            "one serialized message"
+        ]
+
+
+def test_postgres_refund_idempotency_is_race_safe(postgres_url: str) -> None:
+    conversation_repository = ConversationRepository(postgres_url)
+    conversation = conversation_repository.create_conversation(
+        owner_customer_id="customer_001",
+        channel="widget",
+        state="AI_ACTIVE",
+        order_id="order_1001",
+        created_at=datetime.now(),
+    )
+    assert conversation_repository.transition(
+        conversation.conversation_id,
+        expected_state="AI_ACTIVE",
+        new_state="HUMAN_ACTIVE",
+        assigned_staff_id="support_001",
+    ) is not None
+
+    refund_repository = RefundRepository(postgres_url)
+    barrier = Barrier(2)
+
+    def create_refund():
+        barrier.wait()
+        return refund_repository.create(
+            conversation_id=conversation.conversation_id,
+            order_id="order_1001",
+            amount_cents=2500,
+            reason="Concurrent review",
+            idempotency_key=f"pg-race-{conversation.conversation_id}",
+            requested_by="support_001",
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(lambda _: create_refund(), (1, 2)))
+
+    assert all(result is not None for result in results)
+    assert len({result.refund_id for result in results if result is not None}) == 1
+    matching_refunds = [
+        refund
+        for refund in refund_repository.list_all()
+        if refund.conversation_id == conversation.conversation_id
+    ]
+    assert len(matching_refunds) == 1
 
 
 def test_postgres_refund_idempotency_and_review_persist(postgres_url: str) -> None:
