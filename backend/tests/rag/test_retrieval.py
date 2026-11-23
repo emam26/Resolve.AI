@@ -1,3 +1,5 @@
+from dataclasses import replace
+
 from backend.app.rag import (
     DEFAULT_EVALUATION_CASES,
     EvaluationCase,
@@ -8,7 +10,13 @@ from backend.app.rag import (
 )
 from backend.app.rag.evaluation import evaluate_answer_contract
 from backend.app.rag.corpus import POLICY_CORPUS
-from backend.app.rag.evaluation import M11A_EVALUATION_CASES
+from backend.app.rag.evaluation import (
+    DEVELOPMENT_EVALUATION_CASES,
+    DEVELOPMENT_EVALUATION_SET_VERSION,
+    M11A_EVALUATION_CASES,
+    validate_evaluation_case_labels,
+)
+from backend.app.rag.benchmark import CHALLENGING_BENCHMARK_CASES
 
 
 def test_corpus_contains_required_version_and_visibility_cases() -> None:
@@ -158,6 +166,67 @@ def test_m11a_predeclared_operational_cases_are_safe_and_grounded() -> None:
     assert report.wrong_version_exposure == 0.0
     assert report.citation_visibility_accuracy == 1.0
     assert report.unsupported_answer_behavior == 1.0
+
+
+def test_development_set_is_versioned_valid_and_covers_required_case_types() -> None:
+    labels = [case.label for case in DEVELOPMENT_EVALUATION_CASES]
+
+    assert DEVELOPMENT_EVALUATION_SET_VERSION == "rag-development-v1"
+    assert len(labels) == len(set(labels)) == 15
+    assert validate_evaluation_case_labels(DEVELOPMENT_EVALUATION_CASES) == ()
+    assert set(labels).isdisjoint(
+        case.label for case in (*DEFAULT_EVALUATION_CASES, *M11A_EVALUATION_CASES)
+    )
+    assert {case.query for case in DEVELOPMENT_EVALUATION_CASES}.isdisjoint(
+        case.query
+        for case in (
+            *DEFAULT_EVALUATION_CASES,
+            *M11A_EVALUATION_CASES,
+            *CHALLENGING_BENCHMARK_CASES,
+        )
+    )
+    assert sum(label.startswith("dev_paraphrase_") for label in labels) == 3
+    assert sum(label.startswith("dev_hard_negative_") for label in labels) == 3
+    assert sum(label.startswith("dev_ambiguous_") for label in labels) == 2
+    assert sum(label.startswith("dev_wrong_version_") for label in labels) == 2
+    assert sum(label.startswith("dev_internal_customer_") for label in labels) == 2
+    assert sum(label.startswith("dev_unsupported_") for label in labels) == 3
+    assert sum(case.expect_supported_answer for case in DEVELOPMENT_EVALUATION_CASES) == 8
+    assert sum(not case.expect_supported_answer for case in DEVELOPMENT_EVALUATION_CASES) == 7
+
+
+def test_development_set_reports_explicit_per_case_retrieval_and_answer_metrics() -> None:
+    retrieval_report = evaluate_policy_retrieval(cases=DEVELOPMENT_EVALUATION_CASES)
+    answer_report = evaluate_answer_contract(cases=DEVELOPMENT_EVALUATION_CASES)
+
+    labels = [case.label for case in DEVELOPMENT_EVALUATION_CASES]
+    assert [case.label for case in retrieval_report.cases] == labels
+    assert [case.label for case in answer_report.cases] == labels
+    assert retrieval_report.query_count == answer_report.query_count == 15
+    assert retrieval_report.unsupported_answer_behavior == 1.0
+    assert answer_report.unsupported_answer_behavior == 1.0
+    assert answer_report.unsupported_false_acceptance_rate == 0.0
+    assert answer_report.evidence_access_control_accuracy == 1.0
+    assert answer_report.wrong_version_exposure == 0.0
+    assert all(case.retrieval_mode == "lexical" for case in answer_report.cases)
+    assert all(
+        isinstance(case.answer_contract_valid, bool)
+        and isinstance(case.evidence_sufficient, bool)
+        and isinstance(case.citation_access_control_valid, bool)
+        and isinstance(case.evidence_access_control_valid, bool)
+        and isinstance(case.wrong_version_exposed, bool)
+        for case in answer_report.cases
+    )
+
+
+def test_development_labels_fail_closed_when_expected_corpus_version_changes() -> None:
+    changed = replace(DEVELOPMENT_EVALUATION_CASES[0], expected_version="v9")
+
+    errors = validate_evaluation_case_labels((changed,))
+
+    assert errors == (
+        "dev_paraphrase_delivery_estimate: expected policy is absent from corpus",
+    )
 
 
 def test_evaluation_uses_injected_retriever_for_semantic_path() -> None:

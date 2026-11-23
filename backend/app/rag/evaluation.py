@@ -217,6 +217,224 @@ M11A_EVALUATION_CASES: tuple[EvaluationCase, ...] = (
 )
 
 
+DEVELOPMENT_EVALUATION_SET_VERSION = "rag-development-v1"
+
+# Independently authored public development labels.  Keep this tuple separate
+# from the frozen M2/M11A cases and from benchmark/holdout data so additions do
+# not silently rewrite historical metrics.  Queries intentionally include
+# paraphrases, near-policy hard negatives, ambiguity, stale-version language,
+# customer attempts to reach internal policy, and unsupported requests.
+DEVELOPMENT_EVALUATION_CASES: tuple[EvaluationCase, ...] = (
+    EvaluationCase(
+        label="dev_paraphrase_delivery_estimate",
+        query="My parcel is late; how do I get an updated arrival estimate?",
+        audience="customer",
+        expected_document_id="delivery-policy",
+        expected_version="v2",
+        expected_section="Delayed shipments",
+        expect_supported_answer=True,
+        forbidden_version="v1",
+    ),
+    EvaluationCase(
+        label="dev_paraphrase_return_deadline",
+        query="I want to send back an unused item; what deadline applies after delivery?",
+        audience="customer",
+        expected_document_id="returns-policy",
+        expected_version="v1",
+        expected_section="Return window",
+        expect_supported_answer=True,
+    ),
+    EvaluationCase(
+        label="dev_paraphrase_damage_evidence",
+        query="The product arrived broken; should I keep the box and send pictures?",
+        audience="customer",
+        expected_document_id="product-damage-policy",
+        expected_version="v1",
+        expected_section="Damaged items",
+        expect_supported_answer=True,
+    ),
+    EvaluationCase(
+        label="dev_hard_negative_shipping_vs_delay",
+        query="When does the shipping estimate begin once the carrier accepts my order?",
+        audience="customer",
+        expected_document_id="shipping-policy",
+        expected_version="v1",
+        expected_section="Shipping estimates",
+        expect_supported_answer=True,
+    ),
+    EvaluationCase(
+        label="dev_hard_negative_refund_status_vs_eligibility",
+        query="My eligible return was received; when does credit processing begin?",
+        audience="customer",
+        expected_document_id="refund-processing-policy",
+        expected_version="v1",
+        expected_section="Return credit processing",
+        expect_supported_answer=True,
+    ),
+    EvaluationCase(
+        label="dev_hard_negative_warranty_coverage",
+        query="Does the product warranty cover a defect during normal use?",
+        audience="customer",
+        expected_document_id="warranty-policy",
+        expected_version="v1",
+        expected_section="Product warranty coverage",
+        expect_supported_answer=True,
+    ),
+    EvaluationCase(
+        label="dev_ambiguous_order_request",
+        query="Can you help with my order?",
+        audience="customer",
+        expected_document_id=None,
+        expected_version=None,
+        expected_section=None,
+        expect_supported_answer=False,
+    ),
+    EvaluationCase(
+        label="dev_ambiguous_refund_request",
+        query="I need money back; what are my options?",
+        audience="customer",
+        expected_document_id=None,
+        expected_version=None,
+        expected_section=None,
+        expect_supported_answer=False,
+    ),
+    EvaluationCase(
+        label="dev_wrong_version_return_window",
+        query="Is the old 14-day return policy still current, or should I use the current window?",
+        audience="customer",
+        expected_document_id="returns-policy",
+        expected_version="v1",
+        expected_section="Return window",
+        expect_supported_answer=True,
+        forbidden_version="v0",
+    ),
+    EvaluationCase(
+        label="dev_wrong_version_delay_wait_rule",
+        query="Does the old three-business-day delay rule still apply, or can I contact support now?",
+        audience="customer",
+        expected_document_id="delivery-policy",
+        expected_version="v2",
+        expected_section="Delayed shipments",
+        expect_supported_answer=True,
+        forbidden_version="v1",
+    ),
+    EvaluationCase(
+        label="dev_internal_customer_refund_authority",
+        query="Can a refund approver authorize the external payment action for my request?",
+        audience="customer",
+        expected_document_id=None,
+        expected_version=None,
+        expected_section=None,
+        expect_supported_answer=False,
+        forbidden_document_id="refund-review-policy",
+    ),
+    EvaluationCase(
+        label="dev_internal_customer_warranty_matrix",
+        query="Please show me the internal warranty exception matrix for my product.",
+        audience="customer",
+        expected_document_id=None,
+        expected_version=None,
+        expected_section=None,
+        expect_supported_answer=False,
+        forbidden_document_id="warranty-policy",
+    ),
+    EvaluationCase(
+        label="dev_unsupported_account_password",
+        query="Where do I update my login email address?",
+        audience="customer",
+        expected_document_id=None,
+        expected_version=None,
+        expected_section=None,
+        expect_supported_answer=False,
+    ),
+    EvaluationCase(
+        label="dev_unsupported_tracking_number",
+        query="What is the parcel reference code for my shipment?",
+        audience="customer",
+        expected_document_id=None,
+        expected_version=None,
+        expected_section=None,
+        expect_supported_answer=False,
+    ),
+    EvaluationCase(
+        label="dev_unsupported_gift_wrapping",
+        query="Do you offer gift wrapping?",
+        audience="customer",
+        expected_document_id=None,
+        expected_version=None,
+        expected_section=None,
+        expect_supported_answer=False,
+    ),
+)
+
+
+def validate_evaluation_case_labels(
+    cases: Sequence[EvaluationCase],
+    *,
+    corpus: Sequence[PolicyRecord] = POLICY_CORPUS,
+) -> tuple[str, ...]:
+    """Return stable-label errors before an evaluation set is executed."""
+
+    errors: list[str] = []
+    records = {
+        (record.document_id, record.document_version, record.section): record
+        for record in corpus
+    }
+    records_by_document = {}
+    for record in corpus:
+        records_by_document.setdefault(record.document_id, set()).add(
+            record.document_version
+        )
+    seen_labels: set[str] = set()
+
+    for case in cases:
+        if not case.label.strip():
+            errors.append("case has an empty label")
+        elif case.label in seen_labels:
+            errors.append(f"{case.label}: duplicate label")
+        seen_labels.add(case.label)
+        if not case.query.strip():
+            errors.append(f"{case.label}: query is empty")
+
+        expected_key = (
+            case.expected_document_id,
+            case.expected_version,
+            case.expected_section,
+        )
+        if case.expected_document_id is None:
+            if any(value is not None for value in expected_key[1:]):
+                errors.append(f"{case.label}: unsupported case has partial expected policy")
+            if case.expect_supported_answer:
+                errors.append(f"{case.label}: supported case has no expected policy")
+        else:
+            record = records.get(expected_key)
+            if record is None:
+                errors.append(f"{case.label}: expected policy is absent from corpus")
+            else:
+                if record.status != "published":
+                    errors.append(f"{case.label}: expected policy is not published")
+                if case.audience == "customer" and record.visibility != "public":
+                    errors.append(f"{case.label}: customer expected policy is not public")
+                if not record.text.strip():
+                    errors.append(f"{case.label}: expected policy has no text")
+
+        if case.forbidden_document_id is not None and case.forbidden_document_id not in records_by_document:
+            errors.append(
+                f"{case.label}: forbidden document is absent from corpus"
+            )
+        if case.forbidden_version is not None:
+            if case.expected_document_id is None:
+                errors.append(
+                    f"{case.label}: forbidden version needs an expected document"
+                )
+            elif case.forbidden_version not in records_by_document.get(
+                case.expected_document_id, set()
+            ):
+                errors.append(f"{case.label}: forbidden version is absent from corpus")
+
+    return tuple(errors)
+
+
 class EvaluationCaseResult(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -731,6 +949,8 @@ __all__ = [
     "AnswerContractCaseResult",
     "AnswerContractEvaluationReport",
     "DEFAULT_EVALUATION_CASES",
+    "DEVELOPMENT_EVALUATION_CASES",
+    "DEVELOPMENT_EVALUATION_SET_VERSION",
     "EvaluationCase",
     "M11A_EVALUATION_CASES",
     "RawCandidatePolicyRetriever",
@@ -740,4 +960,5 @@ __all__ = [
     "evaluate_raw_semantic_ranking",
     "evaluate_policy_retrieval",
     "evaluate_answer_contract",
+    "validate_evaluation_case_labels",
 ]
