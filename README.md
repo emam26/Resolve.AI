@@ -22,6 +22,8 @@ ResolveAI addresses that workflow with:
 | --- | --- | --- |
 | Customer widget | React/TypeScript/Vite UI with demo customer login, order selection, transcript, and human-handoff control | Local API and frontend checks pass |
 | Staff console | Support inbox, claim/reply/resolve controls, support-side refund-review request form, and refund-approver view | Local API and frontend checks pass |
+| Operations workspace | Authorized overview metrics, recent activity, read-only policy catalog, and merchant-admin team/settings view | PostgreSQL-backed API tests and browser checks pass locally |
+| Embeddable widget mode | Customer-only `?surface=widget` route reusing the server-established demo session boundary | Eight local Playwright checks pass with an explicit system Chrome executable |
 | Identity and authorization | Server-issued synthetic sessions, role checks, and customer order ownership checks | Covered by backend tests |
 | Conversations | SQLAlchemy-backed conversation and message persistence; SQLite is the default local database | SQLite and disposable PostgreSQL runtime exercised locally; no production database |
 | Policy answering | Deterministic lexical retrieval over a small versioned policy corpus with published/visibility filtering and citations | Offline baseline verified |
@@ -217,7 +219,7 @@ $env:RESOLVEAI_LOCUST_PROFILE = "load" # load, stress, or soak
 locust -f scripts\locustfile.py --host http://127.0.0.1:8000 --headless
 ```
 
-The profiles stop automatically after their configured duration. For a short smoke run, set `RESOLVEAI_LOCUST_MAX_SECONDS=5` before starting Locust. They are local performance probes, not production capacity claims; capture the Locust summary with the profile name, API configuration, and machine details when comparing runs.
+The profiles stop automatically after their configured duration. For a short smoke run, set `RESOLVEAI_LOCUST_MAX_SECONDS=5` before starting Locust. The workflow users create bounded synthetic conversations and refund-review records during a run, so longer profiles intentionally measure behavior while local state grows; reset the disposable database between comparable runs. These are local performance probes, not production capacity claims; capture the Locust summary with the profile name, API configuration, and machine details when comparing runs.
 
 ### PostgreSQL policy index (optional)
 
@@ -280,7 +282,7 @@ No Shopify or other production commerce integration, real customer data, payment
 
 - Expand the synthetic policy corpus and challenge labels before recalibrating semantic retrieval on broader vocabulary.
 - Connect the controlled investigation workflow to an owner-approved model SDK behind explicit cost and credential controls.
-- Add a reproducible browser-test runner when the project’s supported automation environment is standardized.
+- Add CI-hosted browser binaries and persistent policy-management/release workflows after their storage and audit contract is approved.
 - Consider production identity, merchant integrations, multi-tenant isolation, and billing only after the single-merchant slice is hardened.
 
 ## Limitations
@@ -290,6 +292,7 @@ No Shopify or other production commerce integration, real customer data, payment
 - PostgreSQL full-text search is implemented for offline comparison only. It reached 0.30 Recall@3 and is not part of the customer runtime.
 - SQLite remains the default local persistence path. PostgreSQL, Docker/WSL, and browser automation were verified only against disposable synthetic data, not production infrastructure.
 - Demo authentication, seeded identities, and the single fictional merchant are not suitable for production use.
+- The staff knowledge surface is currently a safe read-only catalog over the versioned synthetic corpus; draft editing, publishing, and retrieval-index refresh require a persistent policy-management and audit contract.
 
 ## Documentation
 
