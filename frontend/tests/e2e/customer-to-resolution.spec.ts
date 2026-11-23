@@ -7,7 +7,7 @@ test("customer-to-resolution workflow preserves human and refund boundaries", as
   const staff = page.locator('section[aria-labelledby="staff-title"]');
   const approval = page.locator('section[aria-labelledby="refund-title"]');
 
-  await expect(page.getByRole("heading", { name: "ShopEase support" })).toBeVisible();
+  await expect(widget.getByRole("heading", { name: "ShopEase support", exact: true })).toBeVisible();
   await expect(widget.getByText("Demo only.", { exact: false })).toBeVisible();
   await widget.getByRole("button", { name: /Start Demo Customer session/ }).click();
   await widget.locator("#order-id").fill("order_1001");
@@ -35,11 +35,11 @@ test("customer-to-resolution workflow preserves human and refund boundaries", as
   await expect(staff.getByRole("button", { name: new RegExp(conversationId as string) })).toBeVisible();
   await staff.getByRole("button", { name: new RegExp(conversationId as string) }).click();
   await staff.getByRole("button", { name: "Claim conversation" }).click();
-  await expect(staff.getByText("HUMAN_ACTIVE", { exact: true })).toBeVisible();
+  await expect(staff.locator('section[aria-labelledby="staff-conversation-title"]').getByText("HUMAN_ACTIVE", { exact: true })).toBeVisible();
 
   await staff.locator("#staff-message").fill("A support agent is reviewing the synthetic order.");
   await staff.getByRole("button", { name: "Send staff reply" }).click();
-  await expect(staff.getByText("A support agent is reviewing the synthetic order.", { exact: true })).toBeVisible();
+  await expect(staff.locator(".staff-transcript").getByText("A support agent is reviewing the synthetic order.", { exact: true })).toBeVisible();
 
   await staff.locator("#support-refund-amount").fill("25.00");
   await staff.getByRole("button", { name: "Create review request" }).click();
@@ -51,8 +51,9 @@ test("customer-to-resolution workflow preserves human and refund boundaries", as
   await approval.getByRole("button", { name: /Start Demo Approver session/ }).click();
   await expect(approval.getByText(refundId as string, { exact: true })).toBeVisible();
   await approval.getByRole("button", { name: "Approve for external action" }).click();
-  await expect(approval.getByText("APPROVED_EXTERNAL_ACTION_REQUIRED", { exact: true })).toBeVisible();
-  await expect(approval.getByText(/does not move money/, { exact: false })).toBeVisible();
+  const refundCard = approval.locator(".refund-card").filter({ hasText: refundId as string });
+  await expect(refundCard.getByText("APPROVED_EXTERNAL_ACTION_REQUIRED", { exact: true })).toBeVisible();
+  await expect(refundCard.getByText(/no payment operation was performed/, { exact: false })).toBeVisible();
 
   await staff.getByRole("button", { name: "Resolve" }).click();
   await expect(staff.getByText("Conversation resolved", { exact: true })).toBeVisible();

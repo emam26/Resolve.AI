@@ -9,6 +9,7 @@ const pythonExecutable = process.env.RESOLVEAI_PYTHON ?? (
     : `${repositoryRoot}/.venv/bin/python`
 );
 const npmExecutable = process.platform === "win32" ? "npm.cmd" : "npm";
+const configuredBrowser = process.env.RESOLVEAI_PLAYWRIGHT_EXECUTABLE;
 
 export default defineConfig({
   testDir: "./tests/e2e",
@@ -17,6 +18,7 @@ export default defineConfig({
   use: {
     baseURL: "http://127.0.0.1:5173",
     trace: "retain-on-failure",
+    ...(configuredBrowser ? { launchOptions: { executablePath: configuredBrowser } } : {}),
   },
   webServer: [
     {
