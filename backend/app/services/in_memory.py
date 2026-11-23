@@ -110,6 +110,12 @@ class _DemoInvestigationModel:
                 "tracking", "carrier", "shipped", "sent", "delivered", "arrive", "promised", "expected", "estimate", "delivery information", "delivery details", "delivery date", "delivery state", "shipment details", "shipment reference",
             )
         ):
+            # A guarantee question asks for the published delivery policy,
+            # not an order-specific tracking fact.  Keep this before the
+            # shipment-facts branch so the basic local demo order can answer
+            # it without pretending that tracking data is available.
+            if any(term in normalized for term in ("guarantee", "guaranteed")):
+                return ModelDecision(intent="policy_question")
             return ModelDecision(intent="shipment_tracking")
         if any(
             phrase in normalized
