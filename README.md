@@ -207,6 +207,18 @@ npm run build
 
 The same backend and frontend checks are defined in [`.github/workflows/ci.yml`](.github/workflows/ci.yml). The M10 local verification reruns the backend regression suite and the focused PostgreSQL/pgvector integration suite against a disposable database; exact counts are recorded in [`docs/PROJECT_STATE.md`](docs/PROJECT_STATE.md). Frontend typecheck and the production build are also required. CI currently covers deterministic backend tests and frontend compilation/build; the disposable PostgreSQL and browser checks remain explicit local release gates. The M8 comparison below uses a frozen 15-case set and reports retrieval and answer-contract results separately.
 
+### Local load, stress, and soak checks
+
+The optional Locust harness exercises only synthetic local API data. Install its separate load-test dependency, start the API, and choose one bounded profile:
+
+```powershell
+python -m pip install -r requirements-load.txt
+$env:RESOLVEAI_LOCUST_PROFILE = "load" # load, stress, or soak
+locust -f scripts\locustfile.py --host http://127.0.0.1:8000 --headless
+```
+
+The profiles stop automatically after their configured duration. For a short smoke run, set `RESOLVEAI_LOCUST_MAX_SECONDS=5` before starting Locust. They are local performance probes, not production capacity claims; capture the Locust summary with the profile name, API configuration, and machine details when comparing runs.
+
 ### PostgreSQL policy index (optional)
 
 The repository includes an Alembic migration for the `policy_embeddings` table and a local-files-only sentence-transformers seed command. Cache the configured model once from the official model source, then point `RESOLVEAI_DATABASE_URL` at a PostgreSQL instance with the `vector` extension available. Run the migration and seed from `backend/`, then run the read-only evaluator from the repository root:
