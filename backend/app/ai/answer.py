@@ -18,7 +18,10 @@ from backend.app.rag.retrieval import (
     is_sufficient_policy_match,
     retrieve_published_policy,
 )
-from backend.app.rag.semantic import is_sufficient_semantic_match
+from backend.app.rag.semantic import (
+    is_applicable_policy_evidence,
+    is_sufficient_semantic_match,
+)
 
 
 class GroundedAnswer(BaseModel):
@@ -133,6 +136,21 @@ def answer_from_published_policy(
                 if _audience_allows_evidence(item, audience)
             ]
             sufficient = is_sufficient_semantic_match(evidence)
+            if not sufficient:
+                candidate_retriever = getattr(
+                    policy_retriever, "retrieve_published_policy_candidates", None
+                )
+                if callable(candidate_retriever):
+                    candidates = [
+                        item
+                        for item in candidate_retriever(
+                            query, audience=audience, top_k=top_k
+                        )
+                        if _audience_allows_evidence(item, audience)
+                    ]
+                    if is_applicable_policy_evidence(query, candidates):
+                        evidence = candidates[:1]
+                        sufficient = True
             retrieval_mode = "semantic"
         except Exception as error:
             # A failed semantic backend must degrade to the deterministic

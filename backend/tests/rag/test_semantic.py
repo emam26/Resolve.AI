@@ -5,7 +5,7 @@ from typing import Sequence
 import pytest
 from sqlalchemy.dialects import postgresql
 
-from backend.app.rag.models import PolicyRecord
+from backend.app.rag.models import PolicyEvidence, PolicyRecord
 from backend.app.rag.pgvector_store import (
     PolicyEmbeddingRow,
     build_pgvector_policy_query,
@@ -15,6 +15,7 @@ from backend.app.rag.semantic import (
     DEFAULT_EMBEDDING_DIMENSIONS,
     InMemorySemanticRetriever,
     SentenceTransformerEmbeddingProvider,
+    is_applicable_policy_evidence,
     is_sufficient_semantic_match,
 )
 
@@ -161,6 +162,32 @@ def test_semantic_retrieval_and_grounding_guard_reject_weak_matches() -> None:
     evidence = retriever.retrieve_published_policy("unrelated query")
     assert evidence == []
     assert not is_sufficient_semantic_match(evidence)
+
+
+def test_applicability_proof_requires_explicit_numeric_and_anchor_support() -> None:
+    supported = _record(
+        "returns-policy",
+        section="Return window",
+        text=(
+            "Submit a return request within 30 calendar days. Items must be "
+            "unused with original packaging."
+        ),
+    )
+    evidence = [
+        PolicyEvidence(
+            document_id=supported.document_id,
+            document_version=supported.document_version,
+            section=supported.section,
+            release_id=supported.release_id,
+            visibility=supported.visibility,
+            score=0.54,
+            text=supported.text,
+        )
+    ]
+
+    assert is_applicable_policy_evidence("return 30 days unused", evidence)
+    assert not is_applicable_policy_evidence("return 14 days unused", evidence)
+    assert not is_applicable_policy_evidence("I need money back", evidence)
 
 
 def test_semantic_retrieval_accepts_the_sufficiency_threshold_boundary() -> None:

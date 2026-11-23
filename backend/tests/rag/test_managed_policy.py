@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from math import nan
+from math import nan, sqrt
 
 import pytest
 from sqlalchemy import delete, inspect, select, update
@@ -80,6 +80,21 @@ class _DeterministicManagedProvider:
                 vector[-1] = nan
             else:
                 vector = _vector(0 if "shipping" in text.casefold() else 1)
+            vectors.append(vector)
+        return vectors
+
+
+class _LowScoreManagedProvider:
+    """Return a deterministic 0.54 query/policy cosine for M16 coverage."""
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        vectors: list[list[float]] = []
+        for text in texts:
+            if "return 30 days unused" in text.casefold():
+                vector = _vector(383, 0.54)
+                vector[382] = sqrt(1.0 - 0.54**2)
+            else:
+                vector = _vector(383)
             vectors.append(vector)
         return vectors
 
@@ -381,6 +396,41 @@ def test_managed_published_policy_reaches_customer_api(
         assert body["assistant_reply"]["content"] == "M15 shipping guidance."
         assert body["evidence"][0]["document_id"] == "m15-api-policy"
         assert body["evidence"][0]["document_version"] == "v1"
+    finally:
+        retriever.close()
+
+
+def test_managed_customer_answer_uses_explicit_applicability_below_semantic_gate(
+    managed_postgres_engine,
+) -> None:
+    engine = managed_postgres_engine
+    policy = _policy(
+        version_id="pv_m15_low_score",
+        document_id="m15-m16-low-score",
+        release_id="release_m15_m16_low_score",
+        sections=(
+            (
+                "Return window",
+                "A return request must be submitted within 30 calendar days. "
+                "Items must be unused with original packaging.",
+            ),
+        ),
+    )
+    _insert_version(engine, policy)
+    provider = _LowScoreManagedProvider()
+    updater = ManagedPolicyIndexUpdater(embedding_provider=provider, engine=engine)
+    assert updater(policy) == "READY"
+
+    retriever = _retriever(engine, provider)
+    try:
+        answer = answer_from_published_policy(
+            "return 30 days unused",
+            policy_retriever=retriever,
+        )
+        assert answer.grounded is True
+        assert answer.needs_handoff is False
+        assert answer.evidence[0].score == pytest.approx(0.54, abs=0.001)
+        assert answer.evidence[0].document_id == "m15-m16-low-score"
     finally:
         retriever.close()
 

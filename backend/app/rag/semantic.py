@@ -24,6 +24,46 @@ SUPPORTED_AUDIENCES = frozenset(
 _STAFF_AUDIENCES = frozenset(
     {"support_agent", "refund_approver", "merchant_admin"}
 )
+_APPLICABILITY_STOPWORDS = frozenset(
+    {
+        "a",
+        "after",
+        "an",
+        "and",
+        "are",
+        "can",
+        "do",
+        "for",
+        "how",
+        "i",
+        "is",
+        "me",
+        "my",
+        "of",
+        "on",
+        "the",
+        "this",
+        "to",
+        "what",
+        "when",
+        "with",
+        "you",
+    }
+)
+_APPLICABILITY_GENERIC_TERMS = frozenset(
+    {
+        "action",
+        "contact",
+        "customer",
+        "help",
+        "item",
+        "order",
+        "payment",
+        "policy",
+        "request",
+        "support",
+    }
+)
 
 
 class EmbeddingProvider(Protocol):
@@ -132,6 +172,36 @@ class InMemorySemanticRetriever:
         audience: PolicyAudience = "customer",
         top_k: int = 3,
     ) -> list[PolicyEvidence]:
+        return self._retrieve(
+            query,
+            audience=audience,
+            top_k=top_k,
+            minimum_score=self._minimum_score,
+        )
+
+    def retrieve_published_policy_candidates(
+        self,
+        query: str,
+        audience: PolicyAudience = "customer",
+        top_k: int = 3,
+    ) -> list[PolicyEvidence]:
+        """Return access-filtered candidates before the normal score gate."""
+
+        return self._retrieve(
+            query,
+            audience=audience,
+            top_k=top_k,
+            minimum_score=-1.0,
+        )
+
+    def _retrieve(
+        self,
+        query: str,
+        *,
+        audience: PolicyAudience,
+        top_k: int,
+        minimum_score: float,
+    ) -> list[PolicyEvidence]:
         _validate_retrieval_inputs(audience, top_k)
         if not query.strip():
             return []
@@ -147,7 +217,7 @@ class InMemorySemanticRetriever:
             if not _audience_allows(record, audience):
                 continue
             score = cosine_similarity(query_vector, record_vector)
-            if score >= self._minimum_score:
+            if score >= minimum_score:
                 ranked.append((score, record))
 
         ranked.sort(key=lambda item: (-item[0], *_record_sort_key(item[1])))
@@ -212,6 +282,48 @@ def is_sufficient_semantic_match(
     return bool(evidence) and evidence[0].score >= minimum_score
 
 
+def is_applicable_policy_evidence(
+    query: str,
+    evidence: Sequence[PolicyEvidence],
+    *,
+    minimum_anchor_terms: int = 3,
+) -> bool:
+    """Accept a weak semantic candidate only with explicit text support.
+
+    This is a narrow evidence-completeness check, not a replacement for the
+    semantic threshold. It considers only the rank-one candidate, requires
+    every numeric query constraint in its text, and requires at least three
+    content-bearing query terms. Publication and audience filtering remain
+    the retriever's responsibility and are rechecked by the answer layer.
+    """
+
+    if not query.strip() or not evidence or minimum_anchor_terms < 1:
+        return False
+    first = evidence[0]
+    query_terms = _applicability_terms(query)
+    text_terms = set(_applicability_terms(first.text))
+    numeric_terms = {term for term in query_terms if term.isdigit()}
+    if not numeric_terms.issubset(text_terms):
+        return False
+    anchor_terms = {
+        term
+        for term in query_terms
+        if term not in _APPLICABILITY_GENERIC_TERMS
+    }
+    return len(anchor_terms & text_terms) >= minimum_anchor_terms
+
+
+def _applicability_terms(value: str) -> tuple[str, ...]:
+    return tuple(
+        term
+        for term in (
+            "".join(character for character in raw.casefold() if character.isalnum())
+            for raw in value.split()
+        )
+        if term and term not in _APPLICABILITY_STOPWORDS
+    )
+
+
 def _coerce_vector(values: Sequence[float]) -> tuple[float, ...]:
     try:
         vector = tuple(float(value) for value in values)
@@ -256,5 +368,6 @@ __all__ = [
     "SUPPORTED_AUDIENCES",
     "SentenceTransformerEmbeddingProvider",
     "cosine_similarity",
+    "is_applicable_policy_evidence",
     "is_sufficient_semantic_match",
 ]

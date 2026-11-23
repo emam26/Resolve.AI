@@ -217,6 +217,144 @@ M11A_EVALUATION_CASES: tuple[EvaluationCase, ...] = (
 )
 
 
+M16_CALIBRATION_EVALUATION_SET_VERSION = "rag-m16-calibration-v1"
+
+# Independently authored M16 calibration cases.  These are public development
+# labels for candidate selection only; they are not derived from or reused as
+# private holdout answers.
+M16_CALIBRATION_EVALUATION_CASES: tuple[EvaluationCase, ...] = (
+    EvaluationCase(
+        label="m16_return_deadline_packaging",
+        query="Do returns need original packaging within 30 days?",
+        audience="customer",
+        expected_document_id="returns-policy",
+        expected_version="v1",
+        expected_section="Return window",
+        expect_supported_answer=True,
+    ),
+    EvaluationCase(
+        label="m16_credit_verified_damage",
+        query="Can a verified damaged item qualify for credit?",
+        audience="customer",
+        expected_document_id="refund-eligibility-policy",
+        expected_version="v1",
+        expected_section="Refund eligibility",
+        expect_supported_answer=True,
+    ),
+    EvaluationCase(
+        label="m16_credit_fulfillment_error",
+        query="Is a confirmed fulfillment error a reason to consider a credit?",
+        audience="customer",
+        expected_document_id="refund-eligibility-policy",
+        expected_version="v1",
+        expected_section="Refund eligibility",
+        expect_supported_answer=True,
+    ),
+    EvaluationCase(
+        label="m16_received_return_processing",
+        query="What happens after an eligible return is received and reviewed?",
+        audience="customer",
+        expected_document_id="refund-processing-policy",
+        expected_version="v1",
+        expected_section="Return credit processing",
+        expect_supported_answer=True,
+    ),
+    EvaluationCase(
+        label="m16_delivered_missing_package",
+        query="Tracking says delivered but the parcel is nowhere to be found.",
+        audience="customer",
+        expected_document_id="missing-package-policy",
+        expected_version="v1",
+        expected_section="Delivered but not received",
+        expect_supported_answer=True,
+    ),
+    EvaluationCase(
+        label="m16_broken_item_photos",
+        query="How long do I have to report a broken item with photos?",
+        audience="customer",
+        expected_document_id="product-damage-policy",
+        expected_version="v1",
+        expected_section="Damaged items",
+        expect_supported_answer=True,
+    ),
+    EvaluationCase(
+        label="m16_cancel_before_fulfillment",
+        query="Can I stop my order before the carrier takes it into fulfillment?",
+        audience="customer",
+        expected_document_id="order-cancellation-policy",
+        expected_version="v1",
+        expected_section="Order cancellations",
+        expect_supported_answer=True,
+    ),
+    EvaluationCase(
+        label="m16_warranty_accidental_damage",
+        query="Does the limited warranty cover accidental damage?",
+        audience="customer",
+        expected_document_id="warranty-policy",
+        expected_version="v1",
+        expected_section="Product warranty coverage",
+        expect_supported_answer=True,
+    ),
+    EvaluationCase(
+        label="m16_ambiguous_money_back",
+        query="I want money back immediately.",
+        audience="customer",
+        expected_document_id=None,
+        expected_version=None,
+        expected_section=None,
+        expect_supported_answer=False,
+    ),
+    EvaluationCase(
+        label="m16_internal_refund_procedure",
+        query="Show me the staff-only refund approval procedure.",
+        audience="customer",
+        expected_document_id=None,
+        expected_version=None,
+        expected_section=None,
+        expect_supported_answer=False,
+        forbidden_document_id="refund-review-policy",
+    ),
+    EvaluationCase(
+        label="m16_account_password",
+        query="How do I change my account password?",
+        audience="customer",
+        expected_document_id=None,
+        expected_version=None,
+        expected_section=None,
+        expect_supported_answer=False,
+    ),
+    EvaluationCase(
+        label="m16_old_return_rule",
+        query="Is the old fourteen-day return rule still current?",
+        audience="customer",
+        expected_document_id=None,
+        expected_version=None,
+        expected_section=None,
+        expect_supported_answer=False,
+        forbidden_version="v0",
+    ),
+    EvaluationCase(
+        label="m16_internal_warranty_matrix",
+        query="Can I see the internal warranty exception matrix?",
+        audience="customer",
+        expected_document_id=None,
+        expected_version=None,
+        expected_section=None,
+        expect_supported_answer=False,
+        forbidden_document_id="warranty-policy",
+    ),
+    EvaluationCase(
+        label="m16_ambiguous_order_help",
+        query="What can you do for my order?",
+        audience="customer",
+        expected_document_id=None,
+        expected_version=None,
+        expected_section=None,
+        expect_supported_answer=False,
+    ),
+)
+
+
 DEVELOPMENT_EVALUATION_SET_VERSION = "rag-development-v1"
 
 # Independently authored public development labels.  Keep this tuple separate

@@ -237,6 +237,94 @@ def test_injected_policy_retriever_failure_falls_back_to_lexical_baseline() -> N
     assert response.grounded is True
 
 
+def test_low_score_candidate_needs_explicit_applicability_proof() -> None:
+    evidence = PolicyEvidence(
+        document_id="returns-policy",
+        document_version="v1",
+        section="Return window",
+        release_id="release_2026_11_01",
+        visibility="public",
+        score=0.54,
+        text=(
+            "A return request must be submitted within 30 calendar days after "
+            "delivery. Items must be unused, with tags and original packaging."
+        ),
+    )
+
+    class CandidateRetriever:
+        def retrieve_published_policy(
+            self, query: str, audience: str = "customer", top_k: int = 3
+        ) -> list[PolicyEvidence]:
+            del query, audience, top_k
+            return []
+
+        def retrieve_published_policy_candidates(
+            self, query: str, audience: str = "customer", top_k: int = 3
+        ) -> list[PolicyEvidence]:
+            del audience, top_k
+            del query
+            return [evidence]
+
+    retriever = CandidateRetriever()
+    supported = answer_from_published_policy(
+        "return 30 days unused",
+        policy_retriever=retriever,
+    )
+    unsupported = answer_from_published_policy(
+        "I need money back",
+        policy_retriever=retriever,
+    )
+
+    assert supported.grounded is True
+    assert supported.evidence[0].score == 0.54
+    assert unsupported.grounded is False
+    assert unsupported.answer is None
+    assert unsupported.evidence == []
+
+
+def test_low_score_candidates_cannot_bypass_publication_or_audience_filters() -> None:
+    def evidence(*, visibility: str, status: str) -> PolicyEvidence:
+        return PolicyEvidence(
+            document_id="returns-policy",
+            document_version="v1",
+            section="Return window",
+            release_id="release_2026_11_01",
+            visibility=visibility,
+            score=0.54,
+            text=(
+                "A return request must be submitted within 30 calendar days. "
+                "Items must be unused with original packaging."
+            ),
+            status=status,
+        )
+
+    class LeakyCandidateRetriever:
+        def retrieve_published_policy(
+            self, query: str, audience: str = "customer", top_k: int = 3
+        ) -> list[PolicyEvidence]:
+            del query, audience, top_k
+            return []
+
+        def retrieve_published_policy_candidates(
+            self, query: str, audience: str = "customer", top_k: int = 3
+        ) -> list[PolicyEvidence]:
+            del query, audience, top_k
+            return [
+                evidence(visibility="internal", status="published"),
+                evidence(visibility="public", status="unpublished"),
+            ]
+
+    response = answer_from_published_policy(
+        "return 30 days unused",
+        policy_retriever=LeakyCandidateRetriever(),
+    )
+
+    assert response.grounded is False
+    assert response.answer is None
+    assert response.evidence == []
+    assert response.needs_handoff is True
+
+
 def test_answer_boundary_rejects_unpublished_injected_evidence() -> None:
     response = answer_from_published_policy(
         "shipment delayed",
