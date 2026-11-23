@@ -54,12 +54,36 @@ class LocalTransformersPolicyAnswerProvider:
         self._is_encoder_decoder: bool | None = None
         self._generation_lock = Lock()
         self._timed_out = False
+        self._generation_count = 0
+        self._last_usage: dict[str, int | bool] | None = None
+
+    @property
+    def generation_count(self) -> int:
+        """Number of provider calls started by this instance."""
+
+        return self._generation_count
+
+    @property
+    def last_usage(self) -> dict[str, int | bool] | None:
+        """Best-effort token accounting for the last completed generation."""
+
+        return None if self._last_usage is None else dict(self._last_usage)
 
     def generate(self, prompt: PolicyAnswerPrompt) -> object:
         """Return one parsed JSON object or raise for a safe server fallback."""
 
         rendered_prompt = self._render_prompt(prompt)
+        self._generation_count += 1
+        self._last_usage = None
         output = self._run_with_timeout(rendered_prompt)
+        if self._last_usage is None:
+            # Custom test generators do not expose tokenizer counts.  Keep the
+            # harness useful while marking this estimate explicitly.
+            self._last_usage = {
+                "input_tokens": len(rendered_prompt.split()),
+                "output_tokens": len(output.split()),
+                "estimated": True,
+            }
         return self._parse_response(output)
 
     @staticmethod
@@ -127,6 +151,11 @@ class LocalTransformersPolicyAnswerProvider:
         tokens = generated[0]
         if not is_encoder_decoder:
             tokens = tokens[encoded["input_ids"].shape[-1] :]
+        self._last_usage = {
+            "input_tokens": int(encoded["input_ids"].shape[-1]),
+            "output_tokens": int(tokens.shape[-1]),
+            "estimated": False,
+        }
         return tokenizer.decode(tokens, skip_special_tokens=True)
 
     def _load_transformers_model(self) -> tuple[Any, Any, bool]:

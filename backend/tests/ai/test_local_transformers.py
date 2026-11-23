@@ -55,6 +55,11 @@ def test_local_transformers_provider_uses_structured_local_output() -> None:
     response = provider.generate(_prompt())
 
     assert response["citation_ids"] == ["evidence-1"]
+    assert provider.generation_count == 1
+    assert provider.last_usage is not None
+    assert provider.last_usage["estimated"] is True
+    assert provider.last_usage["input_tokens"] > 0
+    assert provider.last_usage["output_tokens"] > 0
     assert "Where is my delayed order?" in seen[0]
     assert "delivery-policy" not in seen[0]
     assert "server_answer_text" in seen[0]
