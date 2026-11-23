@@ -47,6 +47,7 @@ Thumbs.db
 *.dump
 *.backup
 *.bak
+*.db
 
 # Internal Codex workflow materials (keep locally, do not publish)
 /prompts/
