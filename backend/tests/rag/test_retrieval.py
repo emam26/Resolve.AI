@@ -13,6 +13,8 @@ from backend.app.rag.corpus import POLICY_CORPUS
 from backend.app.rag.evaluation import (
     DEVELOPMENT_EVALUATION_CASES,
     DEVELOPMENT_EVALUATION_SET_VERSION,
+    FRESH_DEVELOPMENT_EVALUATION_CASES,
+    FRESH_DEVELOPMENT_EVALUATION_SET_VERSION,
     M11A_EVALUATION_CASES,
     validate_evaluation_case_labels,
 )
@@ -227,6 +229,51 @@ def test_development_labels_fail_closed_when_expected_corpus_version_changes() -
     assert errors == (
         "dev_paraphrase_delivery_estimate: expected policy is absent from corpus",
     )
+
+
+def test_fresh_development_set_is_disjoint_and_label_valid() -> None:
+    labels = [case.label for case in FRESH_DEVELOPMENT_EVALUATION_CASES]
+    historical_cases = (
+        *DEFAULT_EVALUATION_CASES,
+        *M11A_EVALUATION_CASES,
+        *DEVELOPMENT_EVALUATION_CASES,
+        *CHALLENGING_BENCHMARK_CASES,
+    )
+
+    assert FRESH_DEVELOPMENT_EVALUATION_SET_VERSION == "rag-development-v2"
+    assert len(labels) == len(set(labels)) == 16
+    assert validate_evaluation_case_labels(FRESH_DEVELOPMENT_EVALUATION_CASES) == ()
+    assert set(labels).isdisjoint(case.label for case in historical_cases)
+    assert {case.query for case in FRESH_DEVELOPMENT_EVALUATION_CASES}.isdisjoint(
+        case.query for case in historical_cases
+    )
+    assert sum(label.startswith("fresh_paraphrase_") for label in labels) == 3
+    assert sum(label.startswith("fresh_hard_negative_") for label in labels) == 3
+    assert sum(label.startswith("fresh_wrong_version_") for label in labels) == 2
+    assert sum(label.startswith("fresh_staff_") for label in labels) == 1
+    assert sum(label.startswith("fresh_customer_internal_") for label in labels) == 2
+    assert sum(label.startswith("fresh_ambiguous_") for label in labels) == 2
+    assert sum(label.startswith("fresh_unsupported_") for label in labels) == 3
+    assert sum(case.expect_supported_answer for case in FRESH_DEVELOPMENT_EVALUATION_CASES) == 9
+    assert sum(not case.expect_supported_answer for case in FRESH_DEVELOPMENT_EVALUATION_CASES) == 7
+
+
+def test_fresh_development_metrics_keep_ranking_and_answer_contract_separate() -> None:
+    retrieval_report = evaluate_policy_retrieval(cases=FRESH_DEVELOPMENT_EVALUATION_CASES)
+    answer_report = evaluate_answer_contract(cases=FRESH_DEVELOPMENT_EVALUATION_CASES)
+
+    assert retrieval_report.query_count == answer_report.query_count == 16
+    assert answer_report.unsupported_answer_behavior == 1.0
+    assert answer_report.unsupported_false_acceptance_rate == 0.0
+    assert 0.0 <= answer_report.citation_access_control_accuracy <= 1.0
+    assert answer_report.evidence_access_control_accuracy == 1.0
+    assert answer_report.wrong_version_exposure == 0.0
+    assert 0.0 <= retrieval_report.recall_at_3 <= 1.0
+    assert 0.0 <= retrieval_report.citation_visibility_accuracy <= 1.0
+    assert 0.0 <= retrieval_report.wrong_version_exposure <= 1.0
+    assert 0.0 <= answer_report.supported_answer_accuracy <= 1.0
+    assert retrieval_report.as_dict()["Recall@3"] == retrieval_report.recall_at_3
+    assert isinstance(answer_report.supported_answer_accuracy, float)
 
 
 def test_evaluation_uses_injected_retriever_for_semantic_path() -> None:
