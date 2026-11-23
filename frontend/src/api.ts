@@ -115,6 +115,7 @@ export type PolicyStatus = "draft" | "indexing" | "testable" | "published" | "fa
 export type PolicyVisibility = "public" | "internal" | string;
 
 export interface KnowledgePolicySummary {
+  version_id: string | null;
   document_id: string;
   title: string;
   document_version: string;
@@ -122,6 +123,10 @@ export interface KnowledgePolicySummary {
   visibility: PolicyVisibility;
   updated_at: string | null;
   section_count: number;
+  revision: number | null;
+  release_id: string | null;
+  is_active: boolean | null;
+  failure_reason: string | null;
 }
 
 export interface KnowledgePolicySection {
@@ -132,6 +137,41 @@ export interface KnowledgePolicySection {
 export interface KnowledgePolicyDetail extends KnowledgePolicySummary {
   effective_from: string | null;
   effective_to: string | null;
+  sections: KnowledgePolicySection[];
+  index_state?: string;
+}
+
+export interface KnowledgePolicyMutation extends KnowledgePolicyDetail {
+  release_id: string;
+  revision: number;
+  index_state: string;
+}
+
+export interface KnowledgePolicyAuditEvent {
+  event_id: string;
+  audit_id?: string;
+  action: string;
+  actor_id: string;
+  document_id?: string;
+  document_version?: string;
+  release_id?: string;
+  from_status: string | null;
+  to_status: string | null;
+  metadata?: Record<string, unknown>;
+  revision?: number;
+  created_at: string;
+}
+
+export interface KnowledgePolicyAuditResponse {
+  events: KnowledgePolicyAuditEvent[];
+}
+
+export interface KnowledgePolicyDraftInput {
+  document_id: string;
+  title: string;
+  document_version?: string;
+  release_id: string;
+  visibility: PolicyVisibility;
   sections: KnowledgePolicySection[];
 }
 
@@ -184,11 +224,18 @@ interface BackendOperationsSummary {
 interface BackendPolicySection {
   document_id: string;
   document_version: string;
+  version_id?: string;
+  title?: string;
   section: string;
   release_id: string;
   status: string;
+  state?: string;
   visibility: string;
   text: string;
+  revision?: number;
+  is_active?: boolean;
+  failure_reason?: string | null;
+  updated_at?: string | null;
 }
 
 interface BackendPolicyListResponse {
@@ -198,6 +245,66 @@ interface BackendPolicyListResponse {
 interface BackendPolicyDocumentResponse {
   document_id: string;
   policies: BackendPolicySection[];
+}
+
+interface BackendPolicyMutationSection {
+  section: string;
+  text?: string;
+  content?: string;
+}
+
+interface BackendPolicyMutationResponse {
+  version_id?: string | null;
+  document_id: string;
+  title?: string;
+  document_version: string;
+  release_id: string;
+  status: string;
+  state?: string;
+  visibility: string;
+  revision: number;
+  is_active?: boolean;
+  failure_reason?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+  effective_from?: string | null;
+  effective_to?: string | null;
+  sections: BackendPolicyMutationSection[];
+  index_state?: string;
+}
+
+interface BackendPolicyVersionResponse extends BackendPolicyMutationResponse {}
+
+interface BackendPolicyVersionsResponse {
+  versions: BackendPolicyVersionResponse[];
+}
+
+interface BackendPolicyValidateResponse {
+  valid: boolean;
+  errors: string[];
+  state: string;
+  revision: number;
+}
+
+interface BackendPolicyAuditEvent {
+  audit_id?: string;
+  event_id?: string;
+  actor_id: string;
+  action: string;
+  document_id?: string;
+  document_version?: string;
+  release_id?: string;
+  from_state?: string | null;
+  to_state?: string | null;
+  from_status?: string | null;
+  to_status?: string | null;
+  metadata?: Record<string, unknown>;
+  revision?: number;
+  created_at: string;
+}
+
+interface BackendPolicyAuditResponse {
+  events: BackendPolicyAuditEvent[];
 }
 
 interface BackendWorkspaceTeamResponse {
@@ -345,18 +452,69 @@ function summarizePolicySections(sections: BackendPolicySection[]): KnowledgePol
       continue;
     }
     grouped.set(key, {
+      version_id: section.version_id ?? null,
       document_id: section.document_id,
-      title: section.document_id,
+      title: section.title ?? section.document_id,
       document_version: section.document_version,
-      status: section.status,
+      status: section.status || section.state || "unknown",
       visibility: section.visibility,
-      updated_at: null,
+      updated_at: section.updated_at ?? null,
       section_count: 1,
+      revision: section.revision ?? null,
+      release_id: section.release_id ?? null,
+      is_active: section.is_active ?? null,
+      failure_reason: section.failure_reason ?? null,
     });
   }
   return [...grouped.values()].sort((left, right) =>
     `${left.document_id}:${left.document_version}`.localeCompare(`${right.document_id}:${right.document_version}`),
   );
+}
+
+function mapPolicyMutation(raw: BackendPolicyMutationResponse): KnowledgePolicyMutation {
+  const sections = raw.sections.map((section) => ({
+    section: section.section,
+    content: section.text ?? section.content ?? "",
+  }));
+  return {
+    version_id: raw.version_id ?? null,
+    document_id: raw.document_id,
+    title: raw.title ?? raw.document_id,
+    document_version: raw.document_version,
+    status: raw.status || raw.state || "unknown",
+    visibility: raw.visibility,
+    updated_at: raw.updated_at ?? null,
+    section_count: sections.length,
+    effective_from: raw.effective_from ?? null,
+    effective_to: raw.effective_to ?? null,
+    sections,
+    release_id: raw.release_id,
+    revision: raw.revision,
+    index_state: raw.index_state || raw.state || "unknown",
+    is_active: raw.is_active ?? null,
+    failure_reason: raw.failure_reason ?? null,
+  };
+}
+
+function mapPolicyAudit(raw: BackendPolicyAuditEvent): KnowledgePolicyAuditEvent {
+  return {
+    event_id: raw.event_id ?? raw.audit_id ?? "unknown-event",
+    audit_id: raw.audit_id,
+    action: raw.action,
+    actor_id: raw.actor_id,
+    document_id: raw.document_id,
+    document_version: raw.document_version,
+    release_id: raw.release_id,
+    from_status: raw.from_status ?? raw.from_state ?? null,
+    to_status: raw.to_status ?? raw.to_state ?? null,
+    metadata: raw.metadata,
+    revision: raw.revision,
+    created_at: raw.created_at,
+  };
+}
+
+function policySectionsPayload(sections: KnowledgePolicySection[]) {
+  return sections.map((section) => ({ section: section.section, text: section.content }));
 }
 
 export function getKnowledgePolicies(
@@ -391,18 +549,135 @@ export function getKnowledgePolicy(
     const sections = raw.policies;
     const first = sections[0];
     return {
+      version_id: first?.version_id ?? null,
       document_id: raw.document_id,
-      title: raw.document_id,
+      title: first?.title ?? raw.document_id,
       document_version: first?.document_version ?? version ?? "unknown",
-      status: first?.status ?? "unknown",
+      status: first?.status ?? first?.state ?? "unknown",
       visibility: first?.visibility ?? "unknown",
-      updated_at: null,
+      updated_at: first?.updated_at ?? null,
       section_count: sections.length,
       effective_from: null,
       effective_to: null,
+      revision: first?.revision ?? null,
+      release_id: first?.release_id ?? null,
+      is_active: first?.is_active ?? null,
+      failure_reason: first?.failure_reason ?? null,
       sections: sections.map((section) => ({ section: section.section, content: section.text })),
     };
   });
+}
+
+export function createKnowledgePolicy(
+  sessionId: string,
+  input: KnowledgePolicyDraftInput,
+): Promise<KnowledgePolicyMutation> {
+  return requestJson<BackendPolicyMutationResponse>(
+    "/api/v1/knowledge/policies",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        document_id: input.document_id,
+        release_id: input.release_id,
+        ...(input.document_version ? { document_version: input.document_version } : {}),
+        visibility: input.visibility,
+        sections: policySectionsPayload(input.sections),
+      }),
+    },
+    sessionId,
+  ).then(mapPolicyMutation);
+}
+
+export function updateKnowledgePolicy(
+  sessionId: string,
+  versionId: string,
+  input: { expected_revision: number; release_id: string; visibility: PolicyVisibility; sections: KnowledgePolicySection[] },
+): Promise<KnowledgePolicyMutation> {
+  return requestJson<BackendPolicyMutationResponse>(
+    `/api/v1/knowledge/policies/${encodeURIComponent(versionId)}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({
+        expected_revision: input.expected_revision,
+        release_id: input.release_id,
+        visibility: input.visibility,
+        sections: policySectionsPayload(input.sections),
+      }),
+    },
+    sessionId,
+  ).then(mapPolicyMutation);
+}
+
+export function publishKnowledgePolicy(
+  sessionId: string,
+  versionId: string,
+  expectedRevision: number,
+): Promise<KnowledgePolicyMutation> {
+  return requestJson<BackendPolicyMutationResponse>(
+    `/api/v1/knowledge/policies/${encodeURIComponent(versionId)}/publish`,
+    { method: "POST", body: JSON.stringify({ expected_revision: expectedRevision }) },
+    sessionId,
+  ).then(mapPolicyMutation);
+}
+
+export function validateKnowledgePolicy(
+  sessionId: string,
+  versionId: string,
+): Promise<BackendPolicyValidateResponse> {
+  return requestJson<BackendPolicyValidateResponse>(
+    `/api/v1/knowledge/policies/${encodeURIComponent(versionId)}/validate`,
+    { method: "POST" },
+    sessionId,
+  );
+}
+
+export function indexKnowledgePolicy(
+  sessionId: string,
+  versionId: string,
+): Promise<KnowledgePolicyMutation> {
+  return requestJson<BackendPolicyMutationResponse>(
+    `/api/v1/knowledge/policies/${encodeURIComponent(versionId)}/index`,
+    { method: "POST" },
+    sessionId,
+  ).then(mapPolicyMutation);
+}
+
+export function rollbackKnowledgePolicy(
+  sessionId: string,
+  documentId: string,
+  targetVersion: string,
+  expectedRevision: number,
+): Promise<KnowledgePolicyMutation> {
+  return requestJson<BackendPolicyMutationResponse>(
+    `/api/v1/knowledge/policies/${encodeURIComponent(documentId)}/rollback`,
+    {
+      method: "POST",
+      body: JSON.stringify({ target_version: targetVersion, expected_revision: expectedRevision }),
+    },
+    sessionId,
+  ).then(mapPolicyMutation);
+}
+
+export function getKnowledgePolicyAudit(
+  sessionId: string,
+  versionId: string,
+): Promise<KnowledgePolicyAuditResponse> {
+  return requestJson<BackendPolicyAuditResponse>(
+    `/api/v1/knowledge/policies/${encodeURIComponent(versionId)}/audit`,
+    {},
+    sessionId,
+  ).then((raw) => ({ events: raw.events.map(mapPolicyAudit) }));
+}
+
+export function getKnowledgePolicyVersions(
+  sessionId: string,
+  documentId: string,
+): Promise<KnowledgePolicyMutation[]> {
+  return requestJson<BackendPolicyVersionsResponse>(
+    `/api/v1/knowledge/policies/${encodeURIComponent(documentId)}/versions`,
+    {},
+    sessionId,
+  ).then((raw) => raw.versions.map(mapPolicyMutation));
 }
 
 export function getWorkspaceTeam(sessionId: string): Promise<WorkspaceTeamResponse> {

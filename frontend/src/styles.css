@@ -479,10 +479,39 @@ input:focus, textarea:focus { border-color: #4cb8aa; box-shadow: 0 0 0 3px #dff4
 .team-list li > div span, .team-list li small { color: #78939b; font-size: 9px; }
 .team-list li small { grid-column: 2 / -1; }
 .team-status { color: #176d68; font-size: 9px; font-weight: 800; text-transform: uppercase; }
+.notice-code, .notice-details { display: block; margin-top: 4px; color: #7f3f34; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 9px; }
+.policy-action-bar, .policy-rollback-bar, .policy-editor-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 14px 0; }
+.policy-action-bar { padding-top: 14px; border-top: 1px solid #edf2f1; }
+.policy-rollback-bar { justify-content: flex-end; padding-top: 12px; border-top: 1px solid #edf2f1; }
+.policy-rollback-bar label { display: flex; align-items: center; gap: 8px; color: #5b7c84; font-size: 10px; font-weight: 700; }
+.policy-rollback-bar select { min-width: 150px; border: 1px solid #cfe2de; border-radius: 8px; padding: 8px 10px; color: #234958; background: #fff; font: inherit; }
+.policy-audit { margin-top: 14px; padding: 14px; border: 1px solid #d5e4e1; border-radius: 11px; background: #f8fcfb; }
+.policy-audit h4 { margin: 2px 0 0; color: #234958; font-size: 13px; }
+.policy-audit ol { display: grid; gap: 8px; margin: 12px 0 0; padding: 0; list-style: none; }
+.policy-audit li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 3px 10px; padding-top: 9px; border-top: 1px solid #e5efed; color: #78939b; font-size: 10px; }
+.policy-audit li strong, .policy-audit li span { display: block; }
+.policy-audit li strong { color: #234958; }
+.policy-audit li time { grid-row: 1 / span 2; grid-column: 2; white-space: nowrap; }
+.policy-editor-card { margin-top: 16px; padding: 18px; border: 1px solid #9ed5ca; border-radius: 14px; background: #f7fcfa; box-shadow: 0 8px 20px rgba(16, 53, 66, 0.05); }
+.policy-editor-card h3 { margin: 2px 0 0; color: #234958; font-size: 17px; }
+.policy-editor-card .muted { max-width: 620px; margin: 5px 0 0; }
+.policy-editor-meta { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-top: 16px; }
+.policy-editor-meta label, .policy-editor-sections label { display: grid; gap: 5px; color: #5b7c84; font-size: 10px; font-weight: 700; }
+.policy-editor-meta input, .policy-editor-meta select, .policy-editor-sections input, .policy-editor-sections textarea { width: 100%; box-sizing: border-box; border: 1px solid #cfe2de; border-radius: 8px; padding: 9px 10px; color: #234958; background: #fff; font: inherit; font-weight: 400; }
+.policy-editor-meta input:disabled { color: #78939b; background: #eef5f3; }
+.policy-editor-sections { display: grid; gap: 10px; margin-top: 16px; }
+.policy-editor-sections > .workspace-section-heading { padding-bottom: 8px; border-bottom: 1px solid #dcece8; }
+.policy-editor-sections h4 { margin: 0; color: #234958; font-size: 13px; }
+.policy-editor-sections fieldset { display: grid; grid-template-columns: minmax(160px, 0.55fr) minmax(0, 1.45fr) auto; align-items: start; gap: 10px; margin: 0; padding: 12px; border: 1px solid #d5e4e1; border-radius: 10px; background: #fff; }
+.policy-editor-sections legend { padding: 0 5px; color: #176d68; font-size: 9px; font-weight: 800; text-transform: uppercase; }
+.policy-editor-sections .text-button { align-self: end; border: 0; padding: 8px 0; color: #a04f43; background: transparent; font: inherit; font-size: 10px; font-weight: 700; cursor: pointer; }
+.policy-editor-actions { justify-content: flex-end; margin-bottom: 0; }
 
 @media (max-width: 900px) {
   .workspace-login, .workspace-view { margin-right: 28px; margin-left: 28px; }
   .metric-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .policy-editor-meta { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .policy-editor-sections fieldset { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 560px) {
@@ -495,4 +524,6 @@ input:focus, textarea:focus { border-color: #4cb8aa; box-shadow: 0 0 0 3px #dff4
   .metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .knowledge-toolbar { grid-template-columns: 1fr; }
   .knowledge-layout, .team-layout { grid-template-columns: 1fr; }
+  .policy-editor-meta { grid-template-columns: 1fr; }
+  .policy-rollback-bar { justify-content: flex-start; }
 }
