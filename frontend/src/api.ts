@@ -94,6 +94,125 @@ export interface RefundListResponse {
   refunds: RefundSummary[];
 }
 
+export interface OpsActivity {
+  activity_id: string;
+  kind: string;
+  label: string;
+  occurred_at: string | null;
+  conversation_id?: string | null;
+}
+
+export interface OpsSummary {
+  total_conversations: number;
+  active_conversations: number;
+  waiting_for_human: number;
+  resolved_conversations: number;
+  pending_refund_reviews: number;
+  recent_activity: OpsActivity[];
+}
+
+export type PolicyStatus = "draft" | "indexing" | "testable" | "published" | "failed" | string;
+export type PolicyVisibility = "public" | "internal" | string;
+
+export interface KnowledgePolicySummary {
+  document_id: string;
+  title: string;
+  document_version: string;
+  status: PolicyStatus;
+  visibility: PolicyVisibility;
+  updated_at: string | null;
+  section_count: number;
+}
+
+export interface KnowledgePolicySection {
+  section: string;
+  content: string;
+}
+
+export interface KnowledgePolicyDetail extends KnowledgePolicySummary {
+  effective_from: string | null;
+  effective_to: string | null;
+  sections: KnowledgePolicySection[];
+}
+
+export interface KnowledgePoliciesResponse {
+  policies: KnowledgePolicySummary[];
+  total: number;
+}
+
+export interface WorkspaceTeamMember {
+  actor_id: string;
+  display_name: string;
+  role: ActorRole;
+  status: string;
+  permissions: string[];
+}
+
+export interface WorkspaceTeamResponse {
+  members: WorkspaceTeamMember[];
+}
+
+export interface WorkspaceSettings {
+  merchant_name: string;
+  environment: string;
+  retrieval_mode: string;
+  generation_mode: string;
+  synthetic_data: boolean;
+}
+
+export interface WorkspaceSettingsResponse {
+  settings: WorkspaceSettings;
+}
+
+interface BackendOperationsSummary {
+  total_conversations: number;
+  active_conversations: number;
+  waiting_conversations: number;
+  resolved_conversations: number;
+  pending_refund_reviews: number;
+  recent_activity: Array<{
+    conversation_id: string;
+    state: string;
+    order_id: string | null;
+    customer_id: string;
+    assigned_staff_id: string | null;
+    activity_type: string;
+    last_activity_at: string | null;
+  }>;
+}
+
+interface BackendPolicySection {
+  document_id: string;
+  document_version: string;
+  section: string;
+  release_id: string;
+  status: string;
+  visibility: string;
+  text: string;
+}
+
+interface BackendPolicyListResponse {
+  policies: BackendPolicySection[];
+}
+
+interface BackendPolicyDocumentResponse {
+  document_id: string;
+  policies: BackendPolicySection[];
+}
+
+interface BackendWorkspaceTeamResponse {
+  team: ActorSummary[];
+}
+
+interface BackendWorkspaceSettingsResponse {
+  merchant_name: string;
+  policy_source: string;
+  policy_retrieval_mode: string;
+  response_generation_mode: string;
+  database_ready: boolean;
+  commerce_database_configured: boolean;
+}
+
 export interface AppendMessageResponse {
   conversation_id: string;
   state: ConversationState;
@@ -190,6 +309,118 @@ export function loginDemoRefundApprover(): Promise<DemoLoginResponse> {
     method: "POST",
     body: JSON.stringify({ demo_actor_id: "refund_approver_001" }),
   });
+}
+
+export function loginDemoMerchantAdmin(): Promise<DemoLoginResponse> {
+  return requestJson<DemoLoginResponse>("/api/v1/auth/demo-login", {
+    method: "POST",
+    body: JSON.stringify({ demo_actor_id: "merchant_admin_001" }),
+  });
+}
+
+export function getOpsSummary(sessionId: string): Promise<OpsSummary> {
+  return requestJson<BackendOperationsSummary>("/api/v1/ops/summary", {}, sessionId).then((raw) => ({
+    total_conversations: raw.total_conversations,
+    active_conversations: raw.active_conversations,
+    waiting_for_human: raw.waiting_conversations,
+    resolved_conversations: raw.resolved_conversations,
+    pending_refund_reviews: raw.pending_refund_reviews,
+    recent_activity: raw.recent_activity.map((item) => ({
+      activity_id: item.conversation_id,
+      kind: item.activity_type,
+      label: `${item.conversation_id} · ${item.state}`,
+      occurred_at: item.last_activity_at,
+      conversation_id: item.conversation_id,
+    })),
+  }));
+}
+
+function summarizePolicySections(sections: BackendPolicySection[]): KnowledgePolicySummary[] {
+  const grouped = new Map<string, KnowledgePolicySummary>();
+  for (const section of sections) {
+    const key = `${section.document_id}:${section.document_version}`;
+    const current = grouped.get(key);
+    if (current) {
+      current.section_count += 1;
+      continue;
+    }
+    grouped.set(key, {
+      document_id: section.document_id,
+      title: section.document_id,
+      document_version: section.document_version,
+      status: section.status,
+      visibility: section.visibility,
+      updated_at: null,
+      section_count: 1,
+    });
+  }
+  return [...grouped.values()].sort((left, right) =>
+    `${left.document_id}:${left.document_version}`.localeCompare(`${right.document_id}:${right.document_version}`),
+  );
+}
+
+export function getKnowledgePolicies(
+  sessionId: string,
+  options: { query?: string; status?: string } = {},
+): Promise<KnowledgePoliciesResponse> {
+  const params = new URLSearchParams();
+  if (options.query?.trim()) params.set("q", options.query.trim());
+  if (options.status && options.status !== "all") params.set("status", options.status);
+  const query = params.toString();
+  return requestJson<BackendPolicyListResponse>(
+    `/api/v1/knowledge/policies${query ? `?${query}` : ""}`,
+    {},
+    sessionId,
+  ).then((raw) => {
+    const policies = summarizePolicySections(raw.policies);
+    return { policies, total: policies.length };
+  });
+}
+
+export function getKnowledgePolicy(
+  sessionId: string,
+  documentId: string,
+  version?: string,
+): Promise<KnowledgePolicyDetail> {
+  const query = version ? `?version=${encodeURIComponent(version)}` : "";
+  return requestJson<BackendPolicyDocumentResponse>(
+    `/api/v1/knowledge/policies/${encodeURIComponent(documentId)}${query}`,
+    {},
+    sessionId,
+  ).then((raw) => {
+    const sections = raw.policies;
+    const first = sections[0];
+    return {
+      document_id: raw.document_id,
+      title: raw.document_id,
+      document_version: first?.document_version ?? version ?? "unknown",
+      status: first?.status ?? "unknown",
+      visibility: first?.visibility ?? "unknown",
+      updated_at: null,
+      section_count: sections.length,
+      effective_from: null,
+      effective_to: null,
+      sections: sections.map((section) => ({ section: section.section, content: section.text })),
+    };
+  });
+}
+
+export function getWorkspaceTeam(sessionId: string): Promise<WorkspaceTeamResponse> {
+  return requestJson<BackendWorkspaceTeamResponse>("/api/v1/workspace/team", {}, sessionId).then((raw) => ({
+    members: raw.team.map((member) => ({ ...member, status: "active" })),
+  }));
+}
+
+export function getWorkspaceSettings(sessionId: string): Promise<WorkspaceSettingsResponse> {
+  return requestJson<BackendWorkspaceSettingsResponse>("/api/v1/workspace/settings", {}, sessionId).then((raw) => ({
+    settings: {
+      merchant_name: raw.merchant_name,
+      environment: raw.database_ready ? "local · ready" : "local · not ready",
+      retrieval_mode: raw.policy_retrieval_mode,
+      generation_mode: raw.response_generation_mode,
+      synthetic_data: true,
+    },
+  }));
 }
 
 export function createWidgetConversation(

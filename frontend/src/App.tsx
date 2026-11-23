@@ -14,6 +14,7 @@ import {
   getSupportInbox,
   handoffCustomerConversation,
   loginDemoRefundApprover,
+  loginDemoMerchantAdmin,
   loginDemoSupport,
   loginDemoCustomer,
   rejectRefund,
@@ -21,6 +22,7 @@ import {
   RefundSummary,
   SupportConversationSummary,
 } from "./api";
+import WorkspaceSurface, { WorkspaceSurfaceName } from "./WorkspaceSurface";
 import "./styles.css";
 
 type NoticeKind = "error" | "denial";
@@ -29,6 +31,8 @@ interface Notice {
   kind: NoticeKind;
   message: string;
 }
+
+type AppSurface = "support" | WorkspaceSurfaceName;
 
 function noticeFromError(error: unknown): Notice {
   if (error instanceof ApiError) {
@@ -52,7 +56,14 @@ function formatCents(value: number): string {
 }
 
 export default function App() {
+  const querySurface = new URLSearchParams(window.location.search).get("surface");
+  const widgetOnly = querySurface === "widget";
   const [session, setSession] = useState<DemoLoginResponse | null>(null);
+  const [activeSurface, setActiveSurface] = useState<AppSurface>(
+    querySurface === "overview" || querySurface === "knowledge" || querySurface === "team"
+      ? querySurface
+      : "support",
+  );
   const [conversation, setConversation] = useState<ConversationResponse | null>(null);
   const [latestResolution, setLatestResolution] = useState<AppendMessageResponse | null>(null);
   const [orderId, setOrderId] = useState("order_1001");
@@ -84,6 +95,9 @@ export default function App() {
   const [isApproverStarting, setIsApproverStarting] = useState(false);
   const [isRefundsLoading, setIsRefundsLoading] = useState(false);
   const [activeRefundActionId, setActiveRefundActionId] = useState<string | null>(null);
+  const [workspaceSession, setWorkspaceSession] = useState<DemoLoginResponse | null>(null);
+  const [isWorkspaceStarting, setIsWorkspaceStarting] = useState(false);
+  const [workspaceLoginNotice, setWorkspaceLoginNotice] = useState<Notice | null>(null);
 
   async function startDemoSession() {
     setNotice(null);
@@ -201,6 +215,25 @@ export default function App() {
     } finally {
       setIsStaffStarting(false);
     }
+  }
+
+  async function startWorkspaceSession() {
+    setWorkspaceLoginNotice(null);
+    setIsWorkspaceStarting(true);
+    try {
+      setWorkspaceSession(await loginDemoMerchantAdmin());
+    } catch (error) {
+      setWorkspaceSession(null);
+      setWorkspaceLoginNotice(noticeFromError(error));
+    } finally {
+      setIsWorkspaceStarting(false);
+    }
+  }
+
+  function navigateSurface(surface: AppSurface) {
+    setActiveSurface(surface);
+    const nextQuery = surface === "support" ? "" : `?surface=${surface}`;
+    window.history.replaceState({}, "", `${window.location.pathname}${nextQuery}`);
   }
 
   async function refreshStaffInbox() {
@@ -396,9 +429,17 @@ export default function App() {
             <h1 id="widget-title">ShopEase support</h1>
           </div>
           <span className="demo-pill">Local demo</span>
+          {!widgetOnly && (
+            <nav className="surface-nav" aria-label="Application surfaces">
+              <button type="button" className={activeSurface === "support" ? "active" : ""} aria-current={activeSurface === "support" ? "page" : undefined} onClick={() => navigateSurface("support")}>Support</button>
+              <button type="button" className={activeSurface === "overview" ? "active" : ""} aria-current={activeSurface === "overview" ? "page" : undefined} onClick={() => navigateSurface("overview")}>Overview</button>
+              <button type="button" className={activeSurface === "knowledge" ? "active" : ""} aria-current={activeSurface === "knowledge" ? "page" : undefined} onClick={() => navigateSurface("knowledge")}>Knowledge</button>
+              <button type="button" className={activeSurface === "team" ? "active" : ""} aria-current={activeSurface === "team" ? "page" : undefined} onClick={() => navigateSurface("team")}>Team / Settings</button>
+            </nav>
+          )}
         </header>
 
-        <div className="content-grid">
+        {(widgetOnly || activeSurface === "support") && <div className="content-grid">
           <section className="intro-panel" aria-labelledby="intro-title">
             <p className="eyebrow accent">Customer widget preview</p>
             <h2 id="intro-title">A thoughtful place to start an order question.</h2>
@@ -571,9 +612,26 @@ export default function App() {
               </>
             )}
           </section>
-        </div>
+        </div>}
 
-        <section className="staff-panel" aria-labelledby="staff-title">
+        {!widgetOnly && activeSurface !== "support" && (
+          <>
+            <WorkspaceSurface
+              activeSurface={activeSurface}
+              session={workspaceSession}
+              isStarting={isWorkspaceStarting}
+              onStartSession={startWorkspaceSession}
+            />
+            {workspaceLoginNotice && (
+              <div className={`notice ${workspaceLoginNotice.kind}`} role="alert">
+                <strong>{workspaceLoginNotice.kind === "denial" ? "Access denied" : "Local API error"}</strong>
+                <span>{workspaceLoginNotice.message}</span>
+              </div>
+            )}
+          </>
+        )}
+
+        {!widgetOnly && activeSurface === "support" && <section className="staff-panel" aria-labelledby="staff-title">
           <header className="staff-header">
             <div>
               <p className="eyebrow accent">Staff console preview</p>
@@ -785,9 +843,9 @@ export default function App() {
               <span>{staffNotice.message}</span>
             </div>
           )}
-        </section>
+        </section>}
 
-        <section className="staff-panel refund-panel" aria-labelledby="refund-title">
+        {!widgetOnly && activeSurface === "support" && <section className="staff-panel refund-panel" aria-labelledby="refund-title">
           <header className="staff-header">
             <div>
               <p className="eyebrow accent">Approval console preview</p>
@@ -927,7 +985,7 @@ export default function App() {
               <span>{refundNotice.message}</span>
             </div>
           )}
-        </section>
+        </section>}
 
         {notice && (
           <div className={`notice ${notice.kind}`} role="alert">
