@@ -157,6 +157,12 @@ def create_app(
         response.headers["X-Request-ID"] = correlation_id
         return response
 
+    @app.get("/healthz")
+    async def healthcheck():
+        """Process health without exposing configuration or dependency details."""
+
+        return {"status": "ok"}
+
     configured_database_url = database_url or os.getenv(
         "RESOLVEAI_DATABASE_URL", "sqlite+pysqlite:///:memory:"
     )
@@ -186,6 +192,15 @@ def create_app(
     app.state.policy_retriever = configured_policy_retriever
     app.state.response_provider = configured_response_provider
     app.state.commerce_repository = configured_commerce_repository
+
+    @app.get("/readyz")
+    async def readinesscheck():
+        """Report dependency readiness with a stable, non-sensitive response."""
+
+        if service.database_ready():
+            return {"status": "ready"}
+        return JSONResponse(status_code=503, content={"status": "not_ready"})
+
     router = APIRouter(prefix="/api/v1")
 
     @app.exception_handler(RequestValidationError)

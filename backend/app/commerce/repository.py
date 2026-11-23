@@ -6,7 +6,8 @@ from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal, ROUND_HALF_UP
 
-from sqlalchemy import Engine, and_, create_engine, select
+from sqlalchemy import Engine, and_, create_engine, select, text
+from sqlalchemy.exc import SQLAlchemyError
 
 from backend.app.contracts import OrderSummary
 
@@ -93,6 +94,16 @@ class CommerceRepository:
         with self._engine.connect() as connection:
             row = connection.execute(statement).mappings().first()
         return None if row is None else _commerce_order_from_row(row)
+
+    def database_ready(self) -> bool:
+        """Return whether the imported-commerce database accepts a query."""
+
+        try:
+            with self._engine.connect() as connection:
+                connection.execute(text("SELECT 1"))
+            return True
+        except SQLAlchemyError:
+            return False
 
     def close(self) -> None:
         if self._owns_engine:
