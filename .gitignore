@@ -14,6 +14,8 @@ __pycache__/
 node_modules/
 dist/
 coverage/
+/frontend/test-results/
+/frontend/playwright-report/
 # OS/editor noise
 .DS_Store
 Thumbs.db

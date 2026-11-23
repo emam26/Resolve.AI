@@ -21,4 +21,20 @@ npm run typecheck
 npm run build
 ```
 
+## Browser checks
+
+The repository includes deterministic Playwright coverage for the synthetic
+customer-to-resolution workflow and a safe API-failure state:
+
+```powershell
+npm run test:e2e -- --list
+npm run test:e2e
+```
+
+The tests start or reuse the local FastAPI and Vite processes and use SQLite
+with lexical retrieval. A compatible Playwright browser must be installed
+locally before execution; browser binaries are not downloaded by this
+repository. The current IDE environment can list the two tests but does not
+have the Chromium executable, so no browser pass is claimed here.
+
 The UI uses explicitly labelled demo identities and synthetic records. It does not connect to a live customer, commerce, payment, or model provider.
