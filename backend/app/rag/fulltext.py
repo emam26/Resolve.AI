@@ -141,6 +141,7 @@ def _policy_evidence_from_row(
         score=rank,
         text=row.text,
         status=row.status,  # type: ignore[arg-type]
+        is_active=True,
     )
 
 

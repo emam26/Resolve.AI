@@ -64,6 +64,19 @@ _APPLICABILITY_GENERIC_TERMS = frozenset(
         "support",
     }
 )
+_APPLICABILITY_TERM_ALIASES = {
+    "considered": "consider",
+    "considering": "consider",
+    "need": "require",
+    "needs": "require",
+    "qualified": "eligible",
+    "qualifies": "eligible",
+    "qualify": "eligible",
+    "required": "require",
+    "requires": "require",
+    "requests": "request",
+    "returns": "return",
+}
 
 
 class EmbeddingProvider(Protocol):
@@ -255,6 +268,7 @@ def _to_evidence(record: PolicyRecord, score: float) -> PolicyEvidence:
         score=float(score),
         text=record.text,
         status=record.status,
+        is_active=record.status == "published" and record.is_active,
     )
 
 
@@ -293,8 +307,9 @@ def is_applicable_policy_evidence(
     This is a narrow evidence-completeness check, not a replacement for the
     semantic threshold. It considers only the rank-one candidate, requires
     every numeric query constraint in its text, and requires at least three
-    content-bearing query terms. Publication and audience filtering remain
-    the retriever's responsibility and are rechecked by the answer layer.
+    content-bearing query terms to all appear in the evidence text. Publication
+    and audience filtering remain the retriever's responsibility and are
+    rechecked by the answer layer.
     """
 
     if not query.strip() or not evidence or minimum_anchor_terms < 1:
@@ -310,12 +325,14 @@ def is_applicable_policy_evidence(
         for term in query_terms
         if term not in _APPLICABILITY_GENERIC_TERMS
     }
-    return len(anchor_terms & text_terms) >= minimum_anchor_terms
+    if len(anchor_terms) < minimum_anchor_terms:
+        return False
+    return anchor_terms.issubset(text_terms)
 
 
 def _applicability_terms(value: str) -> tuple[str, ...]:
     return tuple(
-        term
+        _APPLICABILITY_TERM_ALIASES.get(term, term)
         for term in (
             "".join(character for character in raw.casefold() if character.isalnum())
             for raw in value.split()

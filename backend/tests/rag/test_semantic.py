@@ -52,6 +52,7 @@ def _record(
     visibility: str = "public",
     section: str = "Policy section",
     text: str = "Policy text",
+    is_active: bool = True,
 ) -> PolicyRecord:
     return PolicyRecord(
         document_id=document_id,
@@ -61,6 +62,7 @@ def _record(
         status=status,  # type: ignore[arg-type]
         visibility=visibility,  # type: ignore[arg-type]
         text=text,
+        is_active=is_active,
     )
 
 
@@ -188,6 +190,92 @@ def test_applicability_proof_requires_explicit_numeric_and_anchor_support() -> N
     assert is_applicable_policy_evidence("return 30 days unused", evidence)
     assert not is_applicable_policy_evidence("return 14 days unused", evidence)
     assert not is_applicable_policy_evidence("I need money back", evidence)
+
+
+def test_applicability_allows_explicit_safe_paraphrase_aliases() -> None:
+    evidence = [
+        PolicyEvidence(
+            document_id="refund-eligibility-policy",
+            document_version="v1",
+            section="Refund eligibility",
+            release_id="release_2026_11_01",
+            visibility="public",
+            score=0.54,
+            text=(
+                "A refund or credit request may be considered for an eligible "
+                "return, a verified damaged item, or a confirmed fulfillment error."
+            ),
+        )
+    ]
+
+    assert is_applicable_policy_evidence(
+        "verified damaged item qualify for credit", evidence
+    )
+
+
+def test_applicability_rejects_superficial_match_with_contradictory_condition() -> None:
+    evidence = [
+        PolicyEvidence(
+            document_id="returns-policy",
+            document_version="v1",
+            section="Return window",
+            release_id="release_2026_11_01",
+            visibility="public",
+            score=0.54,
+            text=(
+                "A return request must be submitted within 30 calendar days. "
+                "Items must be unopened with original packaging."
+            ),
+        )
+    ]
+
+    assert not is_applicable_policy_evidence(
+        "return 30 days opened", evidence
+    )
+
+
+def test_applicability_rejects_candidate_missing_requested_condition_or_fact() -> None:
+    evidence = [
+        PolicyEvidence(
+            document_id="returns-policy",
+            document_version="v1",
+            section="Return window",
+            release_id="release_2026_11_01",
+            visibility="public",
+            score=0.54,
+            text=(
+                "A return request must be submitted within 30 calendar days. "
+                "Items must be unused."
+            ),
+        )
+    ]
+
+    assert not is_applicable_policy_evidence(
+        "return 30 days unused original packaging", evidence
+    )
+
+
+def test_inmemory_published_stale_record_has_no_active_provenance() -> None:
+    record = _record(
+        "returns-policy",
+        version="v0",
+        text="return 30 days unused",
+        is_active=False,
+    )
+    provider = FakeEmbeddingProvider(
+        {
+            "Policy section\nreturn 30 days unused": _vector(1.0, 0.0),
+            "return 30 days unused": _vector(0.54, 0.841665),
+        }
+    )
+    retriever = InMemorySemanticRetriever([record], provider)
+
+    candidates = retriever.retrieve_published_policy_candidates(
+        "return 30 days unused"
+    )
+
+    assert len(candidates) == 1
+    assert candidates[0].is_active is False
 
 
 def test_semantic_retrieval_accepts_the_sufficiency_threshold_boundary() -> None:

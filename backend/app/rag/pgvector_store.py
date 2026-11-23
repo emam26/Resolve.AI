@@ -366,6 +366,7 @@ def policy_evidence_from_row(
         score=score,
         text=row.text,
         status=row.status,  # type: ignore[arg-type]
+        is_active=True,
     )
 
 

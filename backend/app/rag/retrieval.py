@@ -84,6 +84,7 @@ def _evidence(record: PolicyRecord, score: float) -> PolicyEvidence:
         score=score,
         text=record.text,
         status=record.status,
+        is_active=record.status == "published",
     )
 
 

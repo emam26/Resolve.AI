@@ -147,6 +147,7 @@ def answer_from_published_policy(
                             query, audience=audience, top_k=top_k
                         )
                         if _audience_allows_evidence(item, audience)
+                        and item.is_active
                     ]
                     if is_applicable_policy_evidence(query, candidates):
                         evidence = candidates[:1]
