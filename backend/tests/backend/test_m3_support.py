@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
+from threading import Barrier
 
 from fastapi.testclient import TestClient
 
@@ -238,3 +240,150 @@ def test_assistant_append_requires_ai_active_state(tmp_path: Path) -> None:
     restored = repository.get("conv_1001")
     assert restored is not None
     assert restored.messages == ()
+
+
+def test_customer_append_resolution_race_resolution_wins_without_message(
+    monkeypatch,
+) -> None:
+    client = TestClient(create_app())
+    customer = _login(client, "customer_001")
+    headers = {"Authorization": f"Bearer {customer}"}
+    created = client.post(
+        "/api/v1/conversations",
+        headers=headers,
+        json={"channel": "widget", "order_id": "order_1001"},
+    )
+    assert created.status_code == 201
+    conversation_id = created.json()["conversation_id"]
+    repository = client.app.state.service._repository
+    append_unless_resolved = repository.append_message_unless_state
+
+    def resolve_before_append(*args, **kwargs):
+        transitioned = repository.transition(
+            conversation_id,
+            expected_state="AI_ACTIVE",
+            new_state="RESOLVED",
+        )
+        assert transitioned is not None
+        return append_unless_resolved(*args, **kwargs)
+
+    monkeypatch.setattr(
+        repository, "append_message_unless_state", resolve_before_append
+    )
+    response = client.post(
+        f"/api/v1/conversations/{conversation_id}/messages",
+        headers=headers,
+        json={"content": "This must not be stored after resolution."},
+    )
+
+    assert response.status_code == 409
+    restored = client.get(
+        f"/api/v1/conversations/{conversation_id}", headers=headers
+    )
+    assert restored.status_code == 200
+    assert restored.json()["state"] == "RESOLVED"
+    assert restored.json()["messages"] == []
+
+
+def test_customer_append_resolution_race_does_not_invoke_investigation(
+    monkeypatch,
+) -> None:
+    class RecordingModel:
+        calls = 0
+
+        def classify(self, query):
+            self.calls += 1
+            raise AssertionError("investigation must not run after rejected append")
+
+    model = RecordingModel()
+    client = TestClient(create_app(investigation_model=model))
+    customer = _login(client, "customer_001")
+    headers = {"Authorization": f"Bearer {customer}"}
+    created = client.post(
+        "/api/v1/conversations",
+        headers=headers,
+        json={"channel": "widget", "order_id": "order_1001"},
+    )
+    conversation_id = created.json()["conversation_id"]
+    repository = client.app.state.service._repository
+    append_unless_resolved = repository.append_message_unless_state
+
+    def resolve_before_append(*args, **kwargs):
+        assert repository.transition(
+            conversation_id,
+            expected_state="AI_ACTIVE",
+            new_state="RESOLVED",
+        ) is not None
+        return append_unless_resolved(*args, **kwargs)
+
+    monkeypatch.setattr(
+        repository, "append_message_unless_state", resolve_before_append
+    )
+    response = client.post(
+        f"/api/v1/conversations/{conversation_id}/messages",
+        headers=headers,
+        json={"content": "No model call should occur."},
+    )
+
+    assert response.status_code == 409
+    assert model.calls == 0
+
+
+def test_customer_append_commits_before_resolution_and_remains_persisted(
+    tmp_path: Path,
+) -> None:
+    repository = ConversationRepository(f"sqlite+pysqlite:///{tmp_path / 'wins.db'}")
+    repository.create_conversation(
+        owner_customer_id="customer_001",
+        channel="widget",
+        state="AI_ACTIVE",
+        order_id=None,
+        created_at=datetime.now(),
+    )
+    appended = repository.append_message_unless_state(
+        "conv_1001",
+        excluded_state="RESOLVED",
+        author_type="customer",
+        content="This commit wins the interleaving.",
+        created_at=datetime.now(),
+    )
+    assert appended is not None
+    resolved = repository.transition(
+        "conv_1001", expected_state="AI_ACTIVE", new_state="RESOLVED"
+    )
+    assert resolved is not None
+    assert [message.content for message in resolved.messages] == [
+        "This commit wins the interleaving."
+    ]
+
+
+def test_simultaneous_customer_appends_are_serialized(tmp_path: Path) -> None:
+    repository = ConversationRepository(
+        f"sqlite+pysqlite:///{tmp_path / 'simultaneous.db'}"
+    )
+    repository.create_conversation(
+        owner_customer_id="customer_001",
+        channel="widget",
+        state="AI_ACTIVE",
+        order_id=None,
+        created_at=datetime.now(),
+    )
+    barrier = Barrier(2)
+
+    def append(content: str):
+        barrier.wait()
+        return repository.append_message_unless_state(
+            "conv_1001",
+            excluded_state="RESOLVED",
+            author_type="customer",
+            content=content,
+            created_at=datetime.now(),
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(append, ("first", "second")))
+
+    assert all(result is not None for result in results)
+    restored = repository.get("conv_1001")
+    assert restored is not None
+    assert {message.content for message in restored.messages} == {"first", "second"}

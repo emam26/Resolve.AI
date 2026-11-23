@@ -236,6 +236,16 @@ class InMemoryResolveService:
             return None
         return self.actor_summary(actor_id)
 
+    def database_ready(self) -> bool:
+        """Expose only a boolean dependency check to the HTTP readiness route."""
+
+        conversation_ready = self._repository.database_ready()
+        commerce_ready = (
+            self._commerce_repository is None
+            or self._commerce_repository.database_ready()
+        )
+        return conversation_ready and commerce_ready
+
     def order_for_actor(self, order_id: str, actor: ActorSummary) -> OrderSummary | None:
         if actor.role != "customer":
             return None
@@ -300,16 +310,15 @@ class InMemoryResolveService:
             or record.owner_customer_id != actor.customer_id
         ):
             return None
-        if record.state == "RESOLVED":
-            raise ConversationStateConflict("resolved conversations are read-only")
-        updated = self._repository.append_message(
+        updated = self._repository.append_message_unless_state(
             conversation_id,
+            excluded_state="RESOLVED",
             author_type="customer",
             content=content,
             created_at=MESSAGE_TIMESTAMP,
         )
         if updated is None:
-            return None
+            raise ConversationStateConflict("resolved conversations are read-only")
         message = updated.messages[-1]
         investigation = run_investigation(
             content,
