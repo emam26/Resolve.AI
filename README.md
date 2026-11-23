@@ -150,8 +150,15 @@ call a hosted API, access the database, or execute tools. It receives only
 server-authorized policy evidence and must emit one JSON response that passes
 the existing citation and extractive-grounding validation; otherwise ResolveAI
 falls back to the deterministic answer. No generative model weights are
-bundled with this repository, and a real local-model smoke test is not yet
-claimed.
+bundled with this repository. The opt-in harness performs no download and
+reports `not_run` when no model is configured:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\smoke_local_model.py --model C:\models\cached-policy-model
+```
+
+The current development environment contains only the MiniLM embedding cache,
+not a compatible generative model, so no real local-model inference is claimed.
 
 ### Run the API and frontend
 
