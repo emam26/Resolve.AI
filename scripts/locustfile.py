@@ -111,6 +111,135 @@ class SyntheticSupportUser(HttpUser):
         )
 
 
+class SyntheticRefundWorkflowUser(HttpUser):
+    """Exercise one complete synthetic handoff-to-refund-review workflow."""
+
+    wait_time = between(0.5, 1.5)
+
+    def on_start(self):
+        self.customer_headers = self._login("customer_001", "customer")
+        self.support_headers = self._login("support_001", "support")
+        self.approver_headers = self._login("refund_approver_001", "approver")
+        self.conversation_id = None
+        self.refund_id = None
+        self.refund_decided = False
+        self.workflow_ready = False
+
+        conversation = self.client.post(
+            "/api/v1/conversations",
+            headers=self.customer_headers,
+            json={"channel": "widget", "order_id": "order_1001"},
+            name="POST /api/v1/conversations workflow",
+        )
+        if not conversation.ok:
+            return
+        self.conversation_id = conversation.json()["conversation_id"]
+        handoff = self.client.post(
+            f"/api/v1/conversations/{self.conversation_id}/handoff",
+            headers=self.customer_headers,
+            name="POST /api/v1/conversations/{id}/handoff workflow",
+        )
+        if not handoff.ok:
+            return
+        inbox = self.client.get(
+            "/api/v1/support/inbox",
+            headers=self.support_headers,
+            name="GET /api/v1/support/inbox workflow",
+        )
+        if not inbox.ok:
+            return
+        claim = self.client.post(
+            f"/api/v1/support/conversations/{self.conversation_id}/claim",
+            headers=self.support_headers,
+            name="POST /api/v1/support/conversations/{id}/claim workflow",
+        )
+        if not claim.ok:
+            return
+        refund = self.client.post(
+            f"/api/v1/support/conversations/{self.conversation_id}/refunds",
+            headers=self.support_headers,
+            json={
+                "amount_cents": 2500,
+                "reason": "Synthetic load review",
+                "idempotency_key": f"locust-{self.conversation_id}",
+            },
+            name="POST /api/v1/support/conversations/{id}/refunds workflow",
+        )
+        if refund.ok:
+            self.refund_id = refund.json()["refund_id"]
+            self.workflow_ready = True
+
+    def _login(self, actor_id: str, label: str):
+        response = self.client.post(
+            "/api/v1/auth/demo-login",
+            json={"demo_actor_id": actor_id},
+            name=f"POST /api/v1/auth/demo-login {label}",
+        )
+        if not response.ok:
+            return {}
+        return {"Authorization": f"Bearer {response.json()['session_id']}"}
+
+    @task
+    def review_and_verify_refund(self):
+        if not self.workflow_ready or self.refund_id is None:
+            return
+        refunds = self.client.get(
+            "/api/v1/refunds",
+            headers=self.approver_headers,
+            name="GET /api/v1/refunds workflow",
+        )
+        if refunds.ok and not self.refund_decided:
+            self.client.post(
+                f"/api/v1/refunds/{self.refund_id}/reject",
+                headers=self.approver_headers,
+                json={"note": "Synthetic load verification"},
+                name="POST /api/v1/refunds/{id}/reject workflow",
+            )
+            self.refund_decided = True
+
+
+class SyntheticWorkspaceUser(HttpUser):
+    """Exercise authorized staff dashboard and knowledge reads."""
+
+    wait_time = between(0.2, 0.8)
+
+    def on_start(self):
+        response = self.client.post(
+            "/api/v1/auth/demo-login",
+            json={"demo_actor_id": "merchant_admin_001"},
+            name="POST /api/v1/auth/demo-login workspace",
+        )
+        self.authorization = (
+            {"Authorization": f"Bearer {response.json()['session_id']}"}
+            if response.ok
+            else {}
+        )
+
+    @task(3)
+    def operations_summary(self):
+        self.client.get(
+            "/api/v1/ops/summary",
+            headers=self.authorization,
+            name="GET /api/v1/ops/summary",
+        )
+
+    @task(2)
+    def knowledge_catalog(self):
+        self.client.get(
+            "/api/v1/knowledge/policies?q=delivery&status=published&visibility=public",
+            headers=self.authorization,
+            name="GET /api/v1/knowledge/policies",
+        )
+
+    @task
+    def workspace_settings(self):
+        self.client.get(
+            "/api/v1/workspace/settings",
+            headers=self.authorization,
+            name="GET /api/v1/workspace/settings",
+        )
+
+
 class SyntheticHealthUser(HttpUser):
     """Exercise public health/readiness probes during longer local runs."""
 

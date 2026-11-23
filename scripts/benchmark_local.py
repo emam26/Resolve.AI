@@ -10,12 +10,19 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import sys
 import time
 from collections import Counter
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Awaitable, Callable
 
 import httpx
+
+
+REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+if str(REPOSITORY_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPOSITORY_ROOT))
 
 from backend.app.api import create_app
 
