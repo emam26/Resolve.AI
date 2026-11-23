@@ -174,7 +174,11 @@ class _LegacyInvestigationModel:
         return ModelDecision(intent="policy_question")
 
 
-def _run_with_model(case: StructuredEvaluationCase, model) -> StructuredRun:
+def _run_with_model(
+    case: StructuredEvaluationCase,
+    model,
+    response_provider=None,
+) -> StructuredRun:
     decision = model.classify(case.question)
     structured_url = os.getenv("RESOLVEAI_STRUCTURED_EVAL_POSTGRES_URL")
     facts_tool = (
@@ -191,6 +195,7 @@ def _run_with_model(case: StructuredEvaluationCase, model) -> StructuredRun:
         conversation_state="AI_ACTIVE",
         order_id=case.order_id,
         policy_retriever=_BenchmarkPolicyRetriever(case.policy_key),
+        response_provider=response_provider,
     )
     return StructuredRun(
         intent=decision.intent,
@@ -204,11 +209,18 @@ def _run_with_model(case: StructuredEvaluationCase, model) -> StructuredRun:
             for item in result.evidence
         ),
         elapsed_ms=(perf_counter() - started) * 1000,
+        generation_mode=result.generation_mode,
     )
 
 
 def run_case(case: StructuredEvaluationCase) -> StructuredRun:
     return _run_with_model(case, DemoInvestigationModel())
+
+
+def run_case_with_provider(case: StructuredEvaluationCase, response_provider) -> StructuredRun:
+    """Run the same bounded structured benchmark with optional policy generation."""
+
+    return _run_with_model(case, DemoInvestigationModel(), response_provider)
 
 
 def run_baseline_case(case: StructuredEvaluationCase) -> StructuredRun:

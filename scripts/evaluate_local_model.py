@@ -28,6 +28,11 @@ from backend.app.rag.evaluation import (
     M16_CALIBRATION_EVALUATION_CASES,
     M16_CALIBRATION_EVALUATION_SET_VERSION,
 )
+from backend.app.commerce.structured_evaluation import (
+    STRUCTURED_EVALUATION_CASES,
+    evaluate_structured_cases,
+)
+from scripts.evaluate_structured_answers import run_case, run_case_with_provider
 
 
 def _percentile(values: list[float], fraction: float) -> float:
@@ -51,8 +56,14 @@ def _expected_evidence(case, answer) -> bool:
     )
 
 
-def evaluate(model: str, timeout_seconds: float, max_new_tokens: int) -> dict[str, object]:
-    provider = LocalTransformersPolicyAnswerProvider(
+def evaluate(
+    model: str,
+    timeout_seconds: float,
+    max_new_tokens: int,
+    *,
+    provider: LocalTransformersPolicyAnswerProvider | None = None,
+) -> dict[str, object]:
+    provider = provider or LocalTransformersPolicyAnswerProvider(
         model,
         timeout_seconds=timeout_seconds,
         max_new_tokens=max_new_tokens,
@@ -172,6 +183,81 @@ def evaluate(model: str, timeout_seconds: float, max_new_tokens: int) -> dict[st
     }
 
 
+def _structured_payload(report) -> dict[str, object]:
+    """Keep the deterministic and model-assisted structured scores explicit."""
+
+    return {
+        "query_count": report.query_count,
+        "record_and_tool_selection_accuracy": report.tool_authorization_accuracy,
+        "factual_answer_accuracy": report.final_answer_accuracy,
+        "missing_information_safety": report.missing_information_safety,
+        "combined_database_policy_accuracy": report.combined_database_policy_accuracy,
+        "unauthorized_disclosures": report.unauthorized_disclosures,
+        "unauthorized_actions": report.unauthorized_actions,
+        "latency_ms": {
+            "mean": report.latency_mean_ms,
+            "p50": report.latency_p50_ms,
+            "p95": report.latency_p95_ms,
+        },
+        "failure_count": len(report.failures),
+        "failures": list(report.failures),
+    }
+
+
+def evaluate_three_way(
+    model: str,
+    timeout_seconds: float,
+    max_new_tokens: int,
+) -> dict[str, object]:
+    """Evaluate database-only, RAG-only, and combined paths in one run.
+
+    The database-only path remains the existing deterministic typed-tool
+    benchmark.  The RAG-only and combined policy paths use the real provider;
+    no deterministic score is labeled as a model score.
+    """
+
+    provider = LocalTransformersPolicyAnswerProvider(
+        model,
+        timeout_seconds=timeout_seconds,
+        max_new_tokens=max_new_tokens,
+    )
+    rag_only = evaluate(
+        model,
+        timeout_seconds,
+        max_new_tokens,
+        provider=provider,
+    )
+    combined_modes: list[str] = []
+
+    def run_combined_case(case):
+        result = run_case_with_provider(case, provider)
+        if case.category == "database_policy":
+            combined_modes.append(result.generation_mode)
+        return result
+
+    database_only = evaluate_structured_cases(run_case, STRUCTURED_EVALUATION_CASES)
+    combined = evaluate_structured_cases(
+        run_combined_case,
+        STRUCTURED_EVALUATION_CASES,
+    )
+    return {
+        "database_only": {
+            "generation": "deterministic_typed_tools",
+            **_structured_payload(database_only),
+        },
+        "rag_only": rag_only,
+        "combined_database_rag": {
+            "generation": "real_local_provider_on_policy_branch; typed_facts_remain_server_side",
+            "model": model,
+            **_structured_payload(combined),
+            "provider_generation_count": provider.generation_count,
+            "policy_model_accepted_cases": combined_modes.count("model"),
+            "policy_provider_fallbacks": combined_modes.count("deterministic"),
+            "last_usage": provider.last_usage,
+        },
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -189,6 +275,11 @@ def main() -> int:
         type=int,
         default=int(os.getenv("RESOLVEAI_LOCAL_POLICY_MAX_NEW_TOKENS", "256")),
     )
+    parser.add_argument(
+        "--three-way",
+        action="store_true",
+        help="also run the existing typed database and combined-policy benchmark",
+    )
     args = parser.parse_args()
     if not args.model:
         print(
@@ -202,7 +293,12 @@ def main() -> int:
             )
         )
         return 0
-    print(json.dumps(evaluate(args.model, args.timeout_seconds, args.max_new_tokens), indent=2))
+    result = (
+        evaluate_three_way(args.model, args.timeout_seconds, args.max_new_tokens)
+        if args.three_way
+        else evaluate(args.model, args.timeout_seconds, args.max_new_tokens)
+    )
+    print(json.dumps(result, indent=2))
     return 0
 
 

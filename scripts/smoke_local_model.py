@@ -41,6 +41,12 @@ def main() -> int:
         type=float,
         default=float(os.getenv("RESOLVEAI_LOCAL_POLICY_TIMEOUT_SECONDS", "8")),
     )
+    parser.add_argument(
+        "--max-new-tokens",
+        type=int,
+        default=int(os.getenv("RESOLVEAI_LOCAL_POLICY_MAX_NEW_TOKENS", "128")),
+        help="bounded generation length for the smoke path",
+    )
     args = parser.parse_args()
     if not args.model:
         print(
@@ -55,7 +61,9 @@ def main() -> int:
         )
         return 0
 
-    query = "What should I do if my shipment is delayed?"
+    # Keep this smoke query above the deterministic lexical sufficiency gate;
+    # the full natural-language phrasing is covered by the semantic/API tests.
+    query = "shipment delayed"
     evidence = retrieve_published_policy(query, audience="customer", top_k=3)
     if not evidence:
         raise RuntimeError("the local policy corpus did not provide smoke-test evidence")
@@ -75,7 +83,9 @@ def main() -> int:
     authorized = authorized_evidence(evidence, answer_texts)
     prompt = PolicyAnswerPrompt(query=query, evidence=authorized)
     provider = LocalTransformersPolicyAnswerProvider(
-        args.model, timeout_seconds=args.timeout_seconds
+        args.model,
+        timeout_seconds=args.timeout_seconds,
+        max_new_tokens=args.max_new_tokens,
     )
 
     started = time.perf_counter()

@@ -76,6 +76,7 @@ class StructuredRun:
     fact_values: tuple[tuple[str, str], ...] = ()
     evidence_keys: tuple[str, ...] = ()
     elapsed_ms: float = 0.0
+    generation_mode: str = "deterministic"
 
 
 @dataclass(frozen=True)
