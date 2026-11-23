@@ -10,12 +10,13 @@ from __future__ import annotations
 
 from typing import Sequence
 
-from sqlalchemy import String, create_engine, func, literal_column, select, text
+from sqlalchemy import String, and_, create_engine, func, literal_column, or_, select, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import sessionmaker
 
 from .models import PolicyAudience, PolicyEvidence
 from .pgvector_store import PolicyEmbeddingRow
+from backend.app.db.policies import PolicyVersionRow
 from .semantic import SUPPORTED_AUDIENCES
 
 
@@ -56,11 +57,28 @@ def build_full_text_policy_query(
         if audience == "customer"
         else PolicyEmbeddingRow.visibility.in_(("public", "internal"))
     )
+    legacy_policy = PolicyEmbeddingRow.version_id.is_(None)
+    managed_policy = and_(
+        PolicyEmbeddingRow.version_id.is_not(None),
+        PolicyVersionRow.version_id == PolicyEmbeddingRow.version_id,
+        PolicyVersionRow.document_id == PolicyEmbeddingRow.document_id,
+        PolicyVersionRow.document_version == PolicyEmbeddingRow.document_version,
+        PolicyVersionRow.release_id == PolicyEmbeddingRow.release_id,
+        PolicyVersionRow.visibility == PolicyEmbeddingRow.visibility,
+        PolicyVersionRow.state == "PUBLISHED",
+        PolicyVersionRow.is_active.is_(True),
+        PolicyVersionRow.index_state == "READY",
+    )
     return (
         select(PolicyEmbeddingRow, rank)
+        .outerjoin(
+            PolicyVersionRow,
+            PolicyVersionRow.version_id == PolicyEmbeddingRow.version_id,
+        )
         .where(
             PolicyEmbeddingRow.status == "published",
             visibility_filter,
+            or_(legacy_policy, managed_policy),
             document.op("@@")(query_vector),
         )
         .order_by(

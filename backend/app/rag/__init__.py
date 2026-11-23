@@ -20,6 +20,7 @@ from .models import (
     PolicyRecord,
 )
 from .pgvector_store import (
+    ManagedPolicyIndexUpdater,
     PgVectorPolicyRetriever,
     PolicyEmbeddingRow,
     create_pgvector_schema,
@@ -38,6 +39,7 @@ __all__ = [
     "PolicyEvidence",
     "PolicyRecord",
     "PolicyEmbeddingRow",
+    "ManagedPolicyIndexUpdater",
     "PgVectorPolicyRetriever",
     "PostgresFullTextPolicyRetriever",
     "RetrievalEvaluationReport",

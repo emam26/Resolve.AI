@@ -6,9 +6,23 @@ import math
 from typing import Sequence
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import Integer, String, Text, UniqueConstraint, create_engine, select, text
+from sqlalchemy import (
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    and_,
+    create_engine,
+    delete,
+    insert,
+    or_,
+    select,
+    text,
+)
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
+
+from backend.app.db.policies import StoredPolicyVersion, PolicyVersionRow
 
 from .models import PolicyAudience, PolicyEvidence, PolicyRecord
 from .semantic import (
@@ -43,6 +57,10 @@ class PolicyEmbeddingRow(Base):
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    # NULL identifies the original seeded corpus.  Non-NULL values are owned
+    # by the M14 managed policy lifecycle and must be joined to that version
+    # before retrieval can expose them.
+    version_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
     document_id: Mapped[str] = mapped_column(String(255), nullable=False)
     document_version: Mapped[str] = mapped_column(String(64), nullable=False)
     section: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -151,6 +169,72 @@ def create_pgvector_schema(engine: Engine) -> None:
     Base.metadata.create_all(engine)
 
 
+class ManagedPolicyIndexUpdater:
+    """Atomically replace one managed policy version in ``policy_embeddings``.
+
+    The M14 policy repository calls its updater while the version is in an
+    indexing state.  This class therefore writes rows tagged with the stable
+    ``version_id`` but does not decide publication.  Retrieval joins the
+    version table and only exposes rows after the repository has committed an
+    active ``PUBLISHED``/``READY`` state.
+    """
+
+    def __init__(
+        self,
+        database_url: str | None = None,
+        embedding_provider: EmbeddingProvider | None = None,
+        *,
+        engine: Engine | None = None,
+    ) -> None:
+        if embedding_provider is None:
+            raise ValueError("embedding_provider is required")
+        if engine is None:
+            if not database_url or not database_url.startswith(("postgresql", "postgres")):
+                raise ValueError("ManagedPolicyIndexUpdater requires a PostgreSQL URL")
+            engine = create_engine(database_url, future=True)
+        self._engine = engine
+        self._embedding_provider = embedding_provider
+
+    def __call__(self, policy: StoredPolicyVersion) -> str:
+        if not policy.version_id:
+            raise ValueError("managed policy version_id is required")
+        texts = [f"{section.section}\n{section.text}" for section in policy.sections]
+        vectors = self._embedding_provider.embed(texts)
+        if len(vectors) != len(texts):
+            raise ValueError("embedding provider returned an unexpected number of vectors")
+        rows: list[dict[str, object]] = []
+        for section, vector in zip(policy.sections, vectors):
+            values = _validated_embedding(vector)
+            rows.append(
+                {
+                    "version_id": policy.version_id,
+                    "document_id": policy.document_id,
+                    "document_version": policy.document_version,
+                    "section": section.section,
+                    "release_id": policy.release_id,
+                    # The managed-state join, rather than this denormalized
+                    # value, is the publication authority for managed rows.
+                    "status": "published",
+                    "visibility": policy.visibility,
+                    "text": section.text,
+                    "embedding": list(values),
+                }
+            )
+
+        # All validation happens before the transaction starts.  Any delete,
+        # insert, constraint error, or connection failure therefore rolls back
+        # as one unit and leaves the previous version's rows intact.
+        with self._engine.begin() as connection:
+            connection.execute(
+                delete(PolicyEmbeddingRow).where(
+                    PolicyEmbeddingRow.version_id == policy.version_id
+                )
+            )
+            if rows:
+                connection.execute(insert(PolicyEmbeddingRow), rows)
+        return "READY"
+
+
 def seed_policy_embeddings(
     engine: Engine,
     records: Sequence[PolicyRecord],
@@ -166,18 +250,14 @@ def seed_policy_embeddings(
         raise ValueError("embedding provider returned an unexpected number of vectors")
     with Session(engine) as session:
         for record, vector in zip(records, vectors):
-            values = tuple(float(value) for value in vector)
-            if len(values) != DEFAULT_EMBEDDING_DIMENSIONS:
-                raise ValueError(
-                    "policy embedding must have "
-                    f"{DEFAULT_EMBEDDING_DIMENSIONS} dimensions"
-                )
+            values = _validated_embedding(vector)
             existing = session.scalar(
                 select(PolicyEmbeddingRow).where(
                     PolicyEmbeddingRow.document_id == record.document_id,
                     PolicyEmbeddingRow.document_version == record.document_version,
                     PolicyEmbeddingRow.section == record.section,
                     PolicyEmbeddingRow.release_id == record.release_id,
+                    PolicyEmbeddingRow.version_id.is_(None),
                 )
             )
             if existing is None:
@@ -185,6 +265,7 @@ def seed_policy_embeddings(
                     PolicyEmbeddingRow(
                         document_id=record.document_id,
                         document_version=record.document_version,
+                        version_id=None,
                         section=record.section,
                         release_id=record.release_id,
                         status=record.status,
@@ -226,11 +307,28 @@ def build_pgvector_policy_query(
         if audience == "customer"
         else PolicyEmbeddingRow.visibility.in_(("public", "internal"))
     )
+    legacy_policy = PolicyEmbeddingRow.version_id.is_(None)
+    managed_policy = and_(
+        PolicyEmbeddingRow.version_id.is_not(None),
+        PolicyVersionRow.version_id == PolicyEmbeddingRow.version_id,
+        PolicyVersionRow.document_id == PolicyEmbeddingRow.document_id,
+        PolicyVersionRow.document_version == PolicyEmbeddingRow.document_version,
+        PolicyVersionRow.release_id == PolicyEmbeddingRow.release_id,
+        PolicyVersionRow.visibility == PolicyEmbeddingRow.visibility,
+        PolicyVersionRow.state == "PUBLISHED",
+        PolicyVersionRow.is_active.is_(True),
+        PolicyVersionRow.index_state == "READY",
+    )
     return (
         select(PolicyEmbeddingRow, distance)
+        .outerjoin(
+            PolicyVersionRow,
+            PolicyVersionRow.version_id == PolicyEmbeddingRow.version_id,
+        )
         .where(
             PolicyEmbeddingRow.status == "published",
             visibility_filter,
+            or_(legacy_policy, managed_policy),
             distance <= maximum_distance,
         )
         .order_by(
@@ -296,9 +394,25 @@ def _validate_query_inputs(
         )
 
 
+def _validated_embedding(values: Sequence[float]) -> tuple[float, ...]:
+    try:
+        vector = tuple(float(value) for value in values)
+    except (TypeError, ValueError) as error:
+        raise ValueError("policy embedding must contain numbers") from error
+    if len(vector) != DEFAULT_EMBEDDING_DIMENSIONS:
+        raise ValueError(
+            "policy embedding must have "
+            f"{DEFAULT_EMBEDDING_DIMENSIONS} dimensions"
+        )
+    if not all(math.isfinite(value) for value in vector):
+        raise ValueError("policy embedding must contain only finite values")
+    return vector
+
+
 __all__ = [
     "Base",
     "PgVectorPolicyRetriever",
+    "ManagedPolicyIndexUpdater",
     "PolicyEmbeddingRow",
     "build_pgvector_policy_query",
     "create_pgvector_schema",
