@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Final
 from uuid import uuid4
 
-from sqlalchemy import Integer, String, UniqueConstraint, select, update
+from sqlalchemy import CheckConstraint, ForeignKey, Integer, String, UniqueConstraint, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Mapped, mapped_column, sessionmaker
@@ -25,10 +25,19 @@ class RefundRow(Base):
             "idempotency_key",
             name="uq_refund_conversation_idempotency",
         ),
+        CheckConstraint(
+            "state IN ('PENDING_REVIEW', 'APPROVED_EXTERNAL_ACTION_REQUIRED', 'REJECTED')",
+            name="ck_refund_reviews_state",
+        ),
     )
 
     refund_id: Mapped[str] = mapped_column(String(128), primary_key=True)
-    conversation_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    conversation_id: Mapped[str] = mapped_column(
+        String(128),
+        ForeignKey("conversations.conversation_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
     order_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
     amount_cents: Mapped[int] = mapped_column(Integer, nullable=False)
     reason: Mapped[str] = mapped_column(String, nullable=False)
@@ -57,10 +66,17 @@ class RefundRepository:
     """Persist review records without any payment-provider behavior."""
 
     def __init__(
-        self, database_url: str = DEFAULT_REFUND_DATABASE_URL, *, engine: Engine | None = None
+        self,
+        database_url: str = DEFAULT_REFUND_DATABASE_URL,
+        *,
+        engine: Engine | None = None,
+        initialize_schema: bool | None = None,
     ) -> None:
         self._engine = engine or create_database_engine(database_url)
-        Base.metadata.create_all(self._engine)
+        if initialize_schema is None:
+            initialize_schema = self._engine.dialect.name == "sqlite"
+        if initialize_schema:
+            Base.metadata.create_all(self._engine)
         self._session_factory = sessionmaker(self._engine, expire_on_commit=False)
 
     def get(self, refund_id: str) -> StoredRefund | None:

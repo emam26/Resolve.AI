@@ -7,7 +7,9 @@ import os
 from alembic import context
 from sqlalchemy import engine_from_config, pool
 
-from backend.app.rag.pgvector_store import Base
+from backend.app.db.conversations import Base as ConversationBase
+from backend.app.db.refunds import RefundRow  # noqa: F401 - register shared metadata
+from backend.app.rag.pgvector_store import Base as PolicyBase
 
 
 config = context.config
@@ -15,7 +17,7 @@ configured_url = os.getenv("RESOLVEAI_DATABASE_URL")
 if configured_url:
     config.set_main_option("sqlalchemy.url", configured_url.replace("%", "%%"))
 
-target_metadata = Base.metadata
+target_metadata = [PolicyBase.metadata, ConversationBase.metadata]
 
 
 def run_migrations_offline() -> None:
