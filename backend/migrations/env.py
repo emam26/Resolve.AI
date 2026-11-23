@@ -9,6 +9,12 @@ from sqlalchemy import engine_from_config, pool
 
 from backend.app.db.conversations import Base as ConversationBase
 from backend.app.db.refunds import RefundRow  # noqa: F401 - register shared metadata
+from backend.app.db.policies import (  # noqa: F401 - register shared metadata
+    PolicyAuditRow,
+    PolicyIndexRow,
+    PolicySectionRow,
+    PolicyVersionRow,
+)
 from backend.app.rag.pgvector_store import Base as PolicyBase
 
 

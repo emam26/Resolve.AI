@@ -39,18 +39,30 @@ from backend.app.services.in_memory import (
     ForbiddenOperation,
     IdempotencyConflict,
     InMemoryResolveService,
+    PolicyConflict,
+    PolicyValidationError,
     RefundValidationError,
 )
+from backend.app.db.policies import PolicyIndexUpdateError, PolicyIndexUpdater
+from backend.app.services.policy_management import PolicyManagementService
 from backend.app.api.staff_models import (
+    CreatePolicyRequest,
+    EditPolicyRequest,
     OperationsSummaryResponse,
+    PolicyAuditListResponse,
+    PolicyAuditResponse,
     PolicyDocumentResponse,
     PolicyListResponse,
     PolicySectionResponse,
+    PolicyValidationResponse,
+    PolicyVersionResponse,
+    PolicyVersionsResponse,
+    RollbackPolicyRequest,
     WorkspaceSettingsResponse,
     WorkspaceTeamResponse,
 )
 from backend.app.rag.corpus import get_policy_corpus
-from backend.app.rag.pgvector_store import PgVectorPolicyRetriever
+from backend.app.rag.pgvector_store import ManagedPolicyIndexUpdater, PgVectorPolicyRetriever
 from backend.app.rag.semantic import SentenceTransformerEmbeddingProvider
 from backend.app.commerce import CommerceRepository
 
@@ -76,8 +88,10 @@ def _bearer_token(authorization: str | None) -> str | None:
     return token
 
 
-def _configured_policy_retriever(database_url: str) -> PolicyRetriever | None:
-    """Opt into local semantic retrieval only for an explicitly configured PG app."""
+def _configured_policy_components(
+    database_url: str,
+) -> tuple[PolicyRetriever, PolicyIndexUpdater] | None:
+    """Configure one shared local embedding provider for retrieval and indexing."""
 
     if os.getenv("RESOLVEAI_POLICY_RETRIEVAL", "lexical").casefold() != "semantic":
         return None
@@ -90,7 +104,17 @@ def _configured_policy_retriever(database_url: str) -> PolicyRetriever | None:
         ),
         local_files_only=True,
     )
-    return PgVectorPolicyRetriever(database_url, provider)
+    return (
+        PgVectorPolicyRetriever(database_url, provider),
+        ManagedPolicyIndexUpdater(database_url, provider),
+    )
+
+
+def _configured_policy_retriever(database_url: str) -> PolicyRetriever | None:
+    """Opt into local semantic retrieval only for an explicitly configured PG app."""
+
+    components = _configured_policy_components(database_url)
+    return components[0] if components is not None else None
 
 
 def _configured_commerce_repository() -> CommerceRepository | None:
@@ -132,6 +156,66 @@ def _policy_response(record) -> PolicySectionResponse:
         visibility=record.visibility,
         text=record.text,
     )
+
+
+def _managed_policy_status(state: str) -> str:
+    """Keep the legacy catalog's lowercase status while exposing canonical state."""
+
+    return {
+        "DRAFT": "draft",
+        "INDEXING": "indexing",
+        "READY_FOR_TEST": "testable",
+        "PUBLISHED": "published",
+        "FAILED": "failed",
+    }.get(state, state.casefold())
+
+
+def _managed_policy_version_response(record) -> PolicyVersionResponse:
+    from backend.app.api.staff_models import PolicySectionInput
+
+    return PolicyVersionResponse(
+        version_id=record.version_id,
+        document_id=record.document_id,
+        title=record.title,
+        document_version=record.document_version,
+        release_id=record.release_id,
+        state=record.state,
+        status=_managed_policy_status(record.state),
+        visibility=record.visibility,
+        revision=record.revision,
+        is_active=record.is_active,
+        failure_reason=record.failure_reason,
+        index_state=record.index_state,
+        created_at=record.created_at,
+        updated_at=record.updated_at,
+        effective_from=record.effective_from,
+        effective_to=record.effective_to,
+        sections=[PolicySectionInput(section=item.section, text=item.text) for item in record.sections],
+    )
+
+
+def _managed_policy_sections(record) -> list[PolicySectionResponse]:
+    return [
+        PolicySectionResponse(
+            document_id=record.document_id,
+            document_version=record.document_version,
+            section=item.section,
+            release_id=record.release_id,
+            status=_managed_policy_status(record.state),
+            visibility=record.visibility,
+            text=item.text,
+            version_id=record.version_id,
+            title=record.title,
+            state=record.state,
+            revision=record.revision,
+            is_active=record.is_active,
+            failure_reason=record.failure_reason,
+            updated_at=record.updated_at,
+            effective_from=record.effective_from,
+            effective_to=record.effective_to,
+        )
+        for item in record.sections
+    ]
 
 
 def _matching_policy_records(
@@ -176,6 +260,12 @@ class _RefundDecisionRequest(BaseModel):
     note: str | None = Field(default=None, max_length=500)
 
 
+class _PolicyRevisionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    expected_revision: int | None = Field(default=None, ge=1)
+
+
 def create_app(
     database_url: str | None = None,
     *,
@@ -183,6 +273,7 @@ def create_app(
     response_provider: PolicyAnswerProvider | None = None,
     investigation_model: InvestigationModel | None = None,
     commerce_repository: CommerceRepository | None = None,
+    policy_index_updater: PolicyIndexUpdater | None = None,
 ) -> FastAPI:
     """Create an API application with configurable local conversation storage."""
 
@@ -196,8 +287,8 @@ def create_app(
         CORSMiddleware,
         allow_origins=allowed_origins,
         allow_credentials=False,
-        allow_methods=["GET", "POST", "OPTIONS"],
-        allow_headers=["Accept", "Authorization", "Content-Type", "X-Request-ID"],
+        allow_methods=["GET", "POST", "PUT", "PATCH", "OPTIONS"],
+        allow_headers=["Accept", "Authorization", "Content-Type", "Idempotency-Key", "X-Request-ID"],
         expose_headers=["X-Request-ID"],
     )
 
@@ -223,11 +314,14 @@ def create_app(
     configured_database_url = database_url or os.getenv(
         "RESOLVEAI_DATABASE_URL", "sqlite+pysqlite:///:memory:"
     )
-    configured_policy_retriever = (
-        policy_retriever
-        if policy_retriever is not None
-        else _configured_policy_retriever(configured_database_url)
-    )
+    configured_policy_retriever = policy_retriever
+    configured_policy_index_updater = policy_index_updater
+    if configured_policy_retriever is None and configured_policy_index_updater is None:
+        configured_components = _configured_policy_components(configured_database_url)
+        if configured_components is not None:
+            configured_policy_retriever, configured_policy_index_updater = configured_components
+    elif configured_policy_retriever is None:
+        configured_policy_retriever = _configured_policy_retriever(configured_database_url)
     configured_commerce_repository = (
         commerce_repository
         if commerce_repository is not None
@@ -244,7 +338,9 @@ def create_app(
         response_provider=configured_response_provider,
         investigation_model=investigation_model,
         commerce_repository=configured_commerce_repository,
+        policy_index_updater=configured_policy_index_updater,
     )
+    policy_management = PolicyManagementService(repository=service.policy_repository)
     app.state.service = service
     app.state.policy_retriever = configured_policy_retriever
     app.state.response_provider = configured_response_provider
@@ -266,6 +362,14 @@ def create_app(
     ) -> JSONResponse:
         errors = exc.errors()
         path = request.url.path
+        # Authentication takes precedence over body validation on the
+        # protected knowledge-management surface.  This preserves the API's
+        # 401 contract even when an unauthenticated caller sends malformed
+        # mutation input, without revealing policy details.
+        if path.startswith("/api/v1/knowledge/policies") and _bearer_token(
+            request.headers.get("Authorization")
+        ) is None:
+            return _error(401, UNAUTHENTICATED["code"], UNAUTHENTICATED["message"])
         if path.endswith("/auth/demo-login") and any(
             error.get("loc", ())[-1:] == ("demo_actor_id",) for error in errors
         ):
@@ -316,7 +420,7 @@ def create_app(
     @router.get("/knowledge/policies", response_model=PolicyListResponse)
     async def list_knowledge_policies(
         q: str | None = Query(default=None, max_length=200),
-        status: Literal["draft", "unpublished", "published"] | None = None,
+        status: str | None = Query(default=None, max_length=32),
         visibility: Literal["public", "internal"] | None = None,
         authorization: str | None = Header(default=None),
     ):
@@ -327,11 +431,33 @@ def create_app(
             return _error(403, "forbidden", "knowledge access requires a staff role")
         records = _matching_policy_records(
             query=q,
-            status=status,
+            status=status if status in {"draft", "unpublished", "published"} else None,
             visibility=visibility,
         )
+        managed = service.policy_repository.list(
+            query=q,
+            state={
+                "draft": "DRAFT",
+                "indexing": "INDEXING",
+                "testable": "READY_FOR_TEST",
+                "ready_for_test": "READY_FOR_TEST",
+                "published": "PUBLISHED",
+                "failed": "FAILED",
+            }.get((status or "").casefold()),
+            visibility=visibility,
+        )
+        if status == "unpublished":
+            managed = [item for item in managed if not item.is_active and item.state != "PUBLISHED"]
+        managed_keys = {(item.document_id, item.document_version) for item in managed}
+        records = [
+            _policy_response(record)
+            for record in records
+            if (record.document_id, record.document_version) not in managed_keys
+        ]
+        for item in managed:
+            records.extend(_managed_policy_sections(item))
         return PolicyListResponse(
-            policies=[_policy_response(record) for record in records]
+            policies=records
         )
 
     @router.get(
@@ -354,13 +480,355 @@ def create_app(
             if record.document_id == document_id
             and (version is None or record.document_version == version)
         ]
-        if not records:
+        managed = service.policy_repository.list(document_id=document_id)
+        if version is not None:
+            managed = [item for item in managed if item.document_version == version]
+        if managed:
+            managed_keys = {(item.document_version, section.section) for item in managed for section in item.sections}
+            records = [record for record in records if (record.document_version, record.section) not in managed_keys]
+        managed_sections = [section for item in managed for section in _managed_policy_sections(item)]
+        if not records and not managed_sections:
             return _error(404, "policy_not_found", "The requested policy was not found.")
         records.sort(key=lambda record: (record.document_version, record.section))
         return PolicyDocumentResponse(
             document_id=document_id,
-            policies=[_policy_response(record) for record in records],
+            policies=[_policy_response(record) for record in records] + managed_sections,
         )
+
+    @app.post(
+        "/api/v1/knowledge/policies",
+        response_model=PolicyVersionResponse,
+        status_code=201,
+    )
+    async def create_knowledge_policy(
+        request: CreatePolicyRequest,
+        authorization: str | None = Header(default=None),
+    ):
+        actor = current_actor(authorization)
+        if actor is None:
+            return _error(401, UNAUTHENTICATED["code"], UNAUTHENTICATED["message"])
+        try:
+            if request.release_id is not None:
+                record = policy_management.create_draft(
+                    actor,
+                    document_id=request.document_id,
+                    document_version=request.document_version,
+                    release_id=request.release_id,
+                    title=request.title,
+                    visibility=request.visibility,
+                    sections=request.sections,
+                )
+            else:
+                record = service.create_policy(
+                    actor=actor,
+                    document_id=request.document_id,
+                    title=request.title or request.document_id,
+                    document_version=request.document_version,
+                    visibility=request.visibility,
+                    sections=[item.model_dump() for item in request.sections],
+                )
+        except ForbiddenOperation as exc:
+            return _error(403, "forbidden", str(exc))
+        except PermissionError as exc:
+            return _error(403, "forbidden", str(exc))
+        except PolicyConflict as exc:
+            return _error(409, "policy_conflict", str(exc))
+        except PolicyValidationError as exc:
+            return _error(422, "policy_validation_error", str(exc))
+        return _managed_policy_version_response(record)
+
+    @app.patch(
+        "/api/v1/knowledge/policies/{version_id}",
+        response_model=PolicyVersionResponse,
+    )
+    async def edit_knowledge_policy(
+        version_id: str,
+        request: EditPolicyRequest,
+        authorization: str | None = Header(default=None),
+    ):
+        actor = current_actor(authorization)
+        if actor is None:
+            return _error(401, UNAUTHENTICATED["code"], UNAUTHENTICATED["message"])
+        try:
+            record = service.edit_policy(
+                version_id,
+                actor=actor,
+                expected_revision=request.expected_revision,
+                title=request.title,
+                release_id=request.release_id,
+                visibility=request.visibility,
+                sections=None if request.sections is None else [item.model_dump() for item in request.sections],
+            )
+        except ForbiddenOperation as exc:
+            return _error(403, "forbidden", str(exc))
+        except KeyError:
+            return _error(404, "policy_not_found", "The requested policy was not found.")
+        except PolicyConflict as exc:
+            return _error(409, "policy_conflict", str(exc))
+        except PolicyValidationError as exc:
+            return _error(422, "policy_validation_error", str(exc))
+        return _managed_policy_version_response(record)
+
+    @app.post(
+        "/api/v1/knowledge/policies/{version_id}/validate",
+        response_model=PolicyValidationResponse,
+    )
+    async def validate_knowledge_policy(
+        version_id: str,
+        authorization: str | None = Header(default=None),
+    ):
+        actor = current_actor(authorization)
+        if actor is None:
+            return _error(401, UNAUTHENTICATED["code"], UNAUTHENTICATED["message"])
+        try:
+            record, errors = service.validate_policy(version_id, actor=actor)
+        except ForbiddenOperation as exc:
+            return _error(403, "forbidden", str(exc))
+        except KeyError:
+            return _error(404, "policy_not_found", "The requested policy was not found.")
+        return PolicyValidationResponse(valid=not errors, errors=errors, state=record.state, revision=record.revision)
+
+    @app.post(
+        "/api/v1/knowledge/policies/{version_id}/index",
+        response_model=PolicyVersionResponse,
+        status_code=200,
+    )
+    async def index_knowledge_policy(
+        version_id: str,
+        body: _PolicyRevisionRequest | None = Body(default=None),
+        authorization: str | None = Header(default=None),
+    ):
+        actor = current_actor(authorization)
+        if actor is None:
+            return _error(401, UNAUTHENTICATED["code"], UNAUTHENTICATED["message"])
+        try:
+            record = service.index_policy(
+                version_id,
+                actor=actor,
+                expected_revision=None if body is None else body.expected_revision,
+            )
+        except ForbiddenOperation as exc:
+            return _error(403, "forbidden", str(exc))
+        except KeyError:
+            return _error(404, "policy_not_found", "The requested policy was not found.")
+        except PolicyConflict as exc:
+            return _error(409, "policy_conflict", str(exc))
+        except PolicyIndexUpdateError as exc:
+            return _error(503, "policy_index_unavailable", str(exc))
+        return _managed_policy_version_response(record)
+
+    @app.post(
+        "/api/v1/knowledge/policies/{version_id}/publish",
+        response_model=PolicyVersionResponse,
+    )
+    async def publish_knowledge_policy(
+        version_id: str,
+        body: _PolicyRevisionRequest | None = Body(default=None),
+        authorization: str | None = Header(default=None),
+        idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    ):
+        actor = current_actor(authorization)
+        if actor is None:
+            return _error(401, UNAUTHENTICATED["code"], UNAUTHENTICATED["message"])
+        try:
+            record = service.publish_policy(
+                version_id,
+                actor=actor,
+                expected_revision=None if body is None else body.expected_revision,
+                idempotency_key=idempotency_key,
+            )
+        except ForbiddenOperation as exc:
+            return _error(403, "forbidden", str(exc))
+        except KeyError:
+            return _error(404, "policy_not_found", "The requested policy was not found.")
+        except PolicyConflict as exc:
+            return _error(409, "policy_conflict", str(exc))
+        except PolicyIndexUpdateError as exc:
+            return _error(503, "policy_index_unavailable", str(exc))
+        return _managed_policy_version_response(record)
+
+    @app.get(
+        "/api/v1/knowledge/policies/{document_id}/versions",
+        response_model=PolicyVersionsResponse,
+    )
+    async def list_policy_versions(
+        document_id: str,
+        authorization: str | None = Header(default=None),
+    ):
+        actor = current_actor(authorization)
+        if actor is None:
+            return _error(401, UNAUTHENTICATED["code"], UNAUTHENTICATED["message"])
+        try:
+            versions = service.policy_versions(document_id, actor=actor)
+        except ForbiddenOperation as exc:
+            return _error(403, "forbidden", str(exc))
+        return PolicyVersionsResponse(versions=[_managed_policy_version_response(item) for item in versions])
+
+    @app.post(
+        "/api/v1/knowledge/policies/{document_id}/rollback",
+        response_model=PolicyVersionResponse,
+    )
+    async def rollback_knowledge_policy(
+        document_id: str,
+        request: RollbackPolicyRequest,
+        authorization: str | None = Header(default=None),
+    ):
+        actor = current_actor(authorization)
+        if actor is None:
+            return _error(401, UNAUTHENTICATED["code"], UNAUTHENTICATED["message"])
+        try:
+            target_version = request.target_version or request.document_version
+            if target_version is None:
+                return _error(422, "validation_error", "document_version is required")
+            record = service.rollback_policy(
+                document_id,
+                target_version,
+                actor=actor,
+                expected_revision=request.expected_revision,
+            )
+        except ForbiddenOperation as exc:
+            return _error(403, "forbidden", str(exc))
+        except KeyError:
+            return _error(404, "policy_not_found", "The requested policy was not found.")
+        except PolicyConflict as exc:
+            return _error(409, "policy_conflict", str(exc))
+        except PolicyIndexUpdateError as exc:
+            return _error(503, "policy_index_unavailable", str(exc))
+        return _managed_policy_version_response(record)
+
+    @app.get(
+        "/api/v1/knowledge/audit",
+        response_model=PolicyAuditListResponse,
+    )
+    async def list_policy_audit(
+        document_id: str | None = Query(default=None, max_length=128),
+        authorization: str | None = Header(default=None),
+    ):
+        actor = current_actor(authorization)
+        if actor is None:
+            return _error(401, UNAUTHENTICATED["code"], UNAUTHENTICATED["message"])
+        try:
+            events = service.policy_audit(actor=actor, document_id=document_id)
+        except ForbiddenOperation as exc:
+            return _error(403, "forbidden", str(exc))
+        return PolicyAuditListResponse(events=[PolicyAuditResponse(**event.__dict__) for event in events])
+
+    @app.get(
+        "/api/v1/knowledge/policies/{version_id}/audit",
+        response_model=PolicyAuditListResponse,
+    )
+    async def list_policy_version_audit(
+        version_id: str,
+        authorization: str | None = Header(default=None),
+    ):
+        actor = current_actor(authorization)
+        if actor is None:
+            return _error(401, UNAUTHENTICATED["code"], UNAUTHENTICATED["message"])
+        try:
+            events = service.policy_audit(actor=actor, version_id=version_id)
+        except ForbiddenOperation as exc:
+            return _error(403, "forbidden", str(exc))
+        return PolicyAuditListResponse(events=[PolicyAuditResponse(**event.__dict__) for event in events])
+
+    @router.put("/knowledge/policies/{document_id}/{document_version}", response_model=PolicyVersionResponse)
+    async def update_policy_document_version(
+        document_id: str,
+        document_version: str,
+        request: EditPolicyRequest,
+        authorization: str | None = Header(default=None),
+    ):
+        actor = current_actor(authorization)
+        if actor is None:
+            return _error(401, UNAUTHENTICATED["code"], UNAUTHENTICATED["message"])
+        if request.release_id is None or request.visibility is None or request.sections is None:
+            return _error(422, "validation_error", "release_id, visibility, and sections are required")
+        try:
+            record = policy_management.edit_draft(
+                actor,
+                document_id=document_id,
+                document_version=document_version,
+                expected_revision=request.expected_revision,
+                release_id=request.release_id,
+                visibility=request.visibility,
+                sections=request.sections,
+            )
+        except PermissionError as exc:
+            return _error(403, "forbidden", str(exc))
+        except KeyError:
+            return _error(404, "policy_not_found", "The requested policy was not found.")
+        except PolicyConflict as exc:
+            return JSONResponse(status_code=409, content={"error": {"code": "revision_conflict", "message": str(exc), "details": {"current_revision": exc.current_revision, "current_state": exc.current_state}}})
+        except PolicyValidationError as exc:
+            return _error(422, "policy_validation_error", str(exc))
+        except PolicyIndexUpdateError as exc:
+            return _error(503, "policy_index_unavailable", str(exc))
+        return _managed_policy_version_response(record)
+
+    @router.post("/knowledge/policies/{document_id}/{document_version}/publish", response_model=PolicyVersionResponse)
+    async def publish_policy_document_version(
+        document_id: str,
+        document_version: str,
+        request: EditPolicyRequest,
+        authorization: str | None = Header(default=None),
+    ):
+        actor = current_actor(authorization)
+        if actor is None:
+            return _error(401, UNAUTHENTICATED["code"], UNAUTHENTICATED["message"])
+        try:
+            record = policy_management.publish(actor, document_id=document_id, document_version=document_version, expected_revision=request.expected_revision)
+        except PermissionError as exc:
+            return _error(403, "forbidden", str(exc))
+        except KeyError:
+            return _error(404, "policy_not_found", "The requested policy was not found.")
+        except PolicyConflict as exc:
+            return JSONResponse(status_code=409, content={"error": {"code": "revision_conflict", "message": str(exc), "details": {"current_revision": exc.current_revision, "current_state": exc.current_state}}})
+        except PolicyValidationError as exc:
+            return _error(422, "policy_validation_error", str(exc))
+        except PolicyIndexUpdateError as exc:
+            return _error(503, "policy_index_unavailable", str(exc))
+        return _managed_policy_version_response(record)
+
+    @router.post("/knowledge/policies/{document_id}/{document_version}/rollback", response_model=PolicyVersionResponse)
+    async def rollback_policy_document_version(
+        document_id: str,
+        document_version: str,
+        request: RollbackPolicyRequest,
+        authorization: str | None = Header(default=None),
+    ):
+        actor = current_actor(authorization)
+        if actor is None:
+            return _error(401, UNAUTHENTICATED["code"], UNAUTHENTICATED["message"])
+        target_version = request.target_version or request.document_version
+        if target_version is None or request.expected_revision is None:
+            return _error(422, "validation_error", "target_version and expected_revision are required")
+        try:
+            record = policy_management.rollback(actor, document_id=document_id, document_version=document_version, target_version=target_version, expected_revision=request.expected_revision)
+        except PermissionError as exc:
+            return _error(403, "forbidden", str(exc))
+        except KeyError:
+            return _error(404, "policy_not_found", "The requested policy was not found.")
+        except PolicyConflict as exc:
+            return JSONResponse(status_code=409, content={"error": {"code": "revision_conflict", "message": str(exc), "details": {"current_revision": exc.current_revision, "current_state": exc.current_state}}})
+        except PolicyValidationError as exc:
+            return _error(422, "policy_validation_error", str(exc))
+        except PolicyIndexUpdateError as exc:
+            return _error(503, "policy_index_unavailable", str(exc))
+        return _managed_policy_version_response(record)
+
+    @router.get("/knowledge/policies/{document_id}/{document_version}/audit", response_model=PolicyAuditListResponse)
+    async def get_policy_document_audit(
+        document_id: str,
+        document_version: str,
+        authorization: str | None = Header(default=None),
+    ):
+        actor = current_actor(authorization)
+        if actor is None:
+            return _error(401, UNAUTHENTICATED["code"], UNAUTHENTICATED["message"])
+        try:
+            events = policy_management.audit(actor, document_id=document_id, document_version=document_version)
+        except PermissionError as exc:
+            return _error(403, "forbidden", str(exc))
+        return PolicyAuditListResponse(events=[PolicyAuditResponse(**event.__dict__) for event in events])
 
     @router.get("/workspace/team", response_model=WorkspaceTeamResponse)
     async def workspace_team(authorization: str | None = Header(default=None)):

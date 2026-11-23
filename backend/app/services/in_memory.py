@@ -27,7 +27,19 @@ from backend.app.contracts import (
     SupportConversationSummary,
     SupportInboxResponse,
 )
-from backend.app.db import ConversationRepository, RefundRepository, StoredConversation, StoredRefund
+from backend.app.db import (
+    ConversationRepository,
+    PolicyConflict,
+    PolicyIndexUpdater,
+    PolicyRepository,
+    PolicySection,
+    PolicyValidationError,
+    RefundRepository,
+    StoredConversation,
+    StoredRefund,
+    StoredPolicyAudit,
+    StoredPolicyVersion,
+)
 from backend.app.db.conversations import create_database_engine
 from backend.app.commerce import CommerceRepository
 
@@ -133,6 +145,7 @@ class InMemoryResolveService:
         response_provider: PolicyAnswerProvider | None = None,
         investigation_model: InvestigationModel | None = None,
         commerce_repository: CommerceRepository | None = None,
+        policy_index_updater: PolicyIndexUpdater | None = None,
     ) -> None:
         self._sessions: dict[str, str] = {}
         self._policy_retriever = policy_retriever
@@ -146,6 +159,11 @@ class InMemoryResolveService:
         )
         self._refund_repository = RefundRepository(
             configured_database_url, engine=database_engine
+        )
+        self._policy_repository = PolicyRepository(
+            configured_database_url,
+            engine=database_engine,
+            index_updater=policy_index_updater,
         )
         self._orders = {
             "order_1001": _OrderRecord(
@@ -245,6 +263,163 @@ class InMemoryResolveService:
             or self._commerce_repository.database_ready()
         )
         return conversation_ready and commerce_ready
+
+    @property
+    def policy_repository(self) -> PolicyRepository:
+        """Expose the policy repository to authorized API handlers only."""
+
+        return self._policy_repository
+
+    def create_policy(
+        self,
+        *,
+        actor: ActorSummary,
+        document_id: str,
+        title: str,
+        document_version: str | None,
+        visibility: str,
+        sections: list[dict[str, str]],
+    ) -> StoredPolicyVersion:
+        if actor.role != "merchant_admin":
+            raise ForbiddenOperation("policy mutations require merchant_admin")
+        return self._policy_repository.create(
+            actor_id=actor.actor_id,
+            actor_role=actor.role,
+            document_id=document_id,
+            title=title,
+            document_version=document_version,
+            release_id=None,
+            visibility=visibility,
+            sections=[
+                PolicySection(section=item.get("section", ""), text=item.get("text") or item.get("content") or "")
+                for item in sections
+            ],
+        )
+
+    def edit_policy(
+        self,
+        version_id: str,
+        *,
+        actor: ActorSummary,
+        expected_revision: int,
+        title: str | None,
+        release_id: str | None,
+        visibility: str | None,
+        sections: list[dict[str, str]] | None,
+    ) -> StoredPolicyVersion:
+        if actor.role != "merchant_admin":
+            raise ForbiddenOperation("policy mutations require merchant_admin")
+        current = self._policy_repository.get_by_id(version_id)
+        if current is None:
+            raise KeyError(version_id)
+        return self._policy_repository.update_draft(
+            current.document_id,
+            current.document_version,
+            actor_id=actor.actor_id,
+            actor_role=actor.role,
+            expected_revision=expected_revision,
+            release_id=release_id or current.release_id,
+            visibility=visibility or current.visibility,
+            sections=(
+                current.sections
+                if sections is None
+                else [
+                    PolicySection(section=item.get("section", ""), text=item.get("text") or item.get("content") or "")
+                    for item in sections
+                ]
+            ),
+            title=title,
+        )
+
+    def validate_policy(self, version_id: str, *, actor: ActorSummary) -> tuple[StoredPolicyVersion, list[str]]:
+        if actor.role != "merchant_admin":
+            raise ForbiddenOperation("policy validation requires merchant_admin")
+        version = self._policy_repository.get_by_id(version_id)
+        if version is None:
+            raise KeyError(version_id)
+        return version, self._policy_repository.validate(version_id)
+
+    def index_policy(
+        self,
+        version_id: str,
+        *,
+        actor: ActorSummary,
+        fail_reason: str | None = None,
+        expected_revision: int | None = None,
+        idempotency_key: str | None = None,
+    ) -> StoredPolicyVersion:
+        if actor.role != "merchant_admin":
+            raise ForbiddenOperation("policy indexing requires merchant_admin")
+        return self._policy_repository.index(
+            version_id,
+            actor_id=actor.actor_id,
+            actor_role=actor.role,
+            fail_reason=fail_reason,
+            expected_revision=expected_revision,
+            idempotency_key=idempotency_key,
+        )
+
+    def publish_policy(self, version_id: str, *, actor: ActorSummary, expected_revision: int | None = None, idempotency_key: str | None = None) -> StoredPolicyVersion:
+        if actor.role != "merchant_admin":
+            raise ForbiddenOperation("policy publishing requires merchant_admin")
+        current = self._policy_repository.get_by_id(version_id)
+        if current is None:
+            raise KeyError(version_id)
+        return self._policy_repository.publish(
+            current.document_id,
+            current.document_version,
+            actor_id=actor.actor_id,
+            actor_role=actor.role,
+            expected_revision=current.revision if expected_revision is None else expected_revision,
+            idempotency_key=idempotency_key,
+        )
+
+    def rollback_policy(self, document_id: str, document_version: str, *, actor: ActorSummary, expected_revision: int | None = None) -> StoredPolicyVersion:
+        if actor.role != "merchant_admin":
+            raise ForbiddenOperation("policy rollback requires merchant_admin")
+        active = next(
+            (item for item in self._policy_repository.list(document_id=document_id) if item.is_active),
+            None,
+        )
+        if active is None:
+            raise KeyError(document_id)
+        return self._policy_repository.rollback(
+            document_id,
+            active.document_version,
+            target_version=document_version,
+            actor_id=actor.actor_id,
+            actor_role=actor.role,
+            expected_revision=active.revision if expected_revision is None else expected_revision,
+        )
+
+    def policy_versions(self, document_id: str, *, actor: ActorSummary) -> list[StoredPolicyVersion]:
+        if actor.role not in {"support_agent", "refund_approver", "merchant_admin"}:
+            raise ForbiddenOperation("knowledge access requires a staff role")
+        return self._policy_repository.list(document_id=document_id)
+
+    def policy_audit(self, *, actor: ActorSummary, document_id: str | None = None, version_id: str | None = None) -> list[StoredPolicyAudit]:
+        if actor.role != "merchant_admin":
+            raise ForbiddenOperation("policy audit requires merchant_admin")
+        if version_id is not None:
+            record = self._policy_repository.get_by_id(version_id)
+            if record is None:
+                return []
+            return self._policy_repository.audits(
+                document_id=record.document_id,
+                document_version=record.document_version,
+            )
+        if document_id is None:
+            return []
+        records = self._policy_repository.list(document_id=document_id)
+        events: list[StoredPolicyAudit] = []
+        for record in records:
+            events.extend(
+                self._policy_repository.audits(
+                    document_id=record.document_id,
+                    document_version=record.document_version,
+                )
+            )
+        return sorted(events, key=lambda item: item.created_at, reverse=True)
 
     def order_for_actor(self, order_id: str, actor: ActorSummary) -> OrderSummary | None:
         if actor.role != "customer":
