@@ -9,6 +9,16 @@ from .generation import (
     PolicyAnswerProvider,
 )
 from .local_transformers import LocalTransformersPolicyAnswerProvider
+from .provider_adapters import (
+    CloudflareWorkersAIPolicyAnswerProvider,
+    GeminiPolicyAnswerProvider,
+    ModelScopePolicyAnswerProvider,
+    OpenAICompatiblePolicyAnswerProvider,
+    ProviderConfigurationError,
+    ProviderRequestError,
+    RoutedPolicyAnswerProvider,
+    build_provider_adapter,
+)
 
 __all__ = [
     "AuthorizedPolicyEvidence",
@@ -19,5 +29,13 @@ __all__ = [
     "PolicyAnswerProvider",
     "PolicyRetriever",
     "LocalTransformersPolicyAnswerProvider",
+    "CloudflareWorkersAIPolicyAnswerProvider",
+    "GeminiPolicyAnswerProvider",
+    "ModelScopePolicyAnswerProvider",
+    "OpenAICompatiblePolicyAnswerProvider",
+    "ProviderConfigurationError",
+    "ProviderRequestError",
+    "RoutedPolicyAnswerProvider",
     "answer_from_published_policy",
+    "build_provider_adapter",
 ]
