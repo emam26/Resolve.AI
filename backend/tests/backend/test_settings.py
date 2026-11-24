@@ -12,6 +12,7 @@ def test_settings_are_safe_and_external_inference_is_disabled_by_default() -> No
     assert settings.zero_cost_mode is True
     assert settings.provider_request_quota == 0
     assert settings.provider_token_quota == 0
+    assert settings.provider_max_output_tokens == 256
     assert settings.groq_api_key is None
     assert settings.gemini_api_key is None
     assert settings.openrouter_api_key is None
@@ -63,3 +64,10 @@ def test_invalid_provider_limits_fail_closed() -> None:
         assert "provider_request_quota" in str(error)
     else:
         raise AssertionError("negative provider quota must be rejected")
+
+    try:
+        ResolveAISettings(_env_file=None, provider_max_output_tokens=257)
+    except ValidationError as error:
+        assert "provider_max_output_tokens" in str(error)
+    else:
+        raise AssertionError("provider output cap must stay within the approved limit")

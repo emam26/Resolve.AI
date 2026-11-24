@@ -171,6 +171,12 @@ class ResolveAISettings(BaseSettings):
         le=64,
         validation_alias="RESOLVEAI_PROVIDER_MAX_CONCURRENCY",
     )
+    provider_max_output_tokens: int = Field(
+        default=256,
+        gt=0,
+        le=256,
+        validation_alias="RESOLVEAI_PROVIDER_MAX_OUTPUT_TOKENS",
+    )
 
     # Existing local policy and application configuration.
     policy_retrieval: str = Field(

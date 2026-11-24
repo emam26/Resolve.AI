@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import json
 
 import httpx
 import pytest
@@ -70,6 +71,8 @@ def test_openai_compatible_adapters_cover_groq_openrouter_agnes_chutes_and_model
             assert str(request.url) == expected_url
             assert request.headers["authorization"] == "Bearer secret-value"
             body = request.read()
+            payload = json.loads(body)
+            assert payload["max_tokens"] == 256
             assert b"customer_id" not in body
             assert b"order_id" not in body
             assert b"secret-value" not in body
@@ -106,6 +109,7 @@ def test_gemini_adapter_uses_header_key_and_native_response_shape() -> None:
         assert request.headers["x-goog-api-key"] == "secret-value"
         assert "key=" not in str(request.url)
         body = request.read()
+        assert json.loads(body)["generationConfig"]["maxOutputTokens"] == 256
         assert b"customer_id" not in body
         return httpx.Response(
             200,

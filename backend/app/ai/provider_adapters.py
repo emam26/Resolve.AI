@@ -163,15 +163,19 @@ class _HTTPProvider:
         model_id: str,
         *,
         timeout_seconds: float = 8.0,
+        max_output_tokens: int = 256,
         client: httpx.Client | None = None,
     ) -> None:
         if not model_id.strip():
             raise ProviderConfigurationError("model_id is required")
         if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
             raise ProviderConfigurationError("timeout_seconds must be positive")
+        if max_output_tokens <= 0:
+            raise ProviderConfigurationError("max_output_tokens must be positive")
         self.provider = provider
         self.model_id = model_id.strip()
         self.timeout_seconds = timeout_seconds
+        self.max_output_tokens = max_output_tokens
         self._client = client or httpx.Client()
         self._owns_client = client is None
         self.last_usage: ProviderUsage | None = None
@@ -238,6 +242,7 @@ class OpenAICompatiblePolicyAnswerProvider(_HTTPProvider):
         *,
         base_url: str | None = None,
         timeout_seconds: float = 8.0,
+        max_output_tokens: int = 256,
         client: httpx.Client | None = None,
     ) -> None:
         if provider not in {"groq", "openrouter", "agnes", "chutes", "modelscope"}:
@@ -248,7 +253,13 @@ class OpenAICompatiblePolicyAnswerProvider(_HTTPProvider):
             base_url = OPENAI_COMPATIBLE_BASE_URLS.get(provider)
         if not base_url:
             raise ProviderConfigurationError("an explicit provider base URL is required")
-        super().__init__(provider, model_id, timeout_seconds=timeout_seconds, client=client)
+        super().__init__(
+            provider,
+            model_id,
+            timeout_seconds=timeout_seconds,
+            max_output_tokens=max_output_tokens,
+            client=client,
+        )
         self._endpoint = base_url.rstrip("/")
         if not self._endpoint.endswith("/chat/completions"):
             self._endpoint += "/chat/completions"
@@ -266,6 +277,7 @@ class OpenAICompatiblePolicyAnswerProvider(_HTTPProvider):
                     {"role": "user", "content": user},
                 ],
                 "temperature": 0,
+                "max_tokens": self.max_output_tokens,
                 "response_format": {"type": "json_object"},
             },
         )
@@ -304,11 +316,18 @@ class GeminiPolicyAnswerProvider(_HTTPProvider):
         *,
         base_url: str = DEFAULT_GEMINI_BASE_URL,
         timeout_seconds: float = 8.0,
+        max_output_tokens: int = 256,
         client: httpx.Client | None = None,
     ) -> None:
         if not api_key.strip():
             raise ProviderConfigurationError("provider credential is required")
-        super().__init__("gemini", model_id, timeout_seconds=timeout_seconds, client=client)
+        super().__init__(
+            "gemini",
+            model_id,
+            timeout_seconds=timeout_seconds,
+            max_output_tokens=max_output_tokens,
+            client=client,
+        )
         self._api_key = api_key
         self._endpoint = (
             f"{base_url.rstrip('/')}/models/{quote(self.model_id, safe='')}:generateContent"
@@ -322,7 +341,11 @@ class GeminiPolicyAnswerProvider(_HTTPProvider):
             payload={
                 "system_instruction": {"parts": [{"text": system}]},
                 "contents": [{"role": "user", "parts": [{"text": user}]}],
-                "generationConfig": {"responseMimeType": "application/json", "temperature": 0},
+                "generationConfig": {
+                    "responseMimeType": "application/json",
+                    "temperature": 0,
+                    "maxOutputTokens": self.max_output_tokens,
+                },
             },
         )
         candidates = body.get("candidates")
@@ -353,11 +376,18 @@ class CloudflareWorkersAIPolicyAnswerProvider(_HTTPProvider):
         *,
         base_url: str = DEFAULT_CLOUDFLARE_BASE_URL,
         timeout_seconds: float = 8.0,
+        max_output_tokens: int = 256,
         client: httpx.Client | None = None,
     ) -> None:
         if not account_id.strip() or not api_token.strip():
             raise ProviderConfigurationError("Cloudflare account and credential are required")
-        super().__init__("cloudflare", model_id, timeout_seconds=timeout_seconds, client=client)
+        super().__init__(
+            "cloudflare",
+            model_id,
+            timeout_seconds=timeout_seconds,
+            max_output_tokens=max_output_tokens,
+            client=client,
+        )
         self._api_token = api_token
         self._endpoint = (
             f"{base_url.rstrip('/')}/accounts/{quote(account_id, safe='')}/ai/run/"
@@ -375,6 +405,7 @@ class CloudflareWorkersAIPolicyAnswerProvider(_HTTPProvider):
                     {"role": "user", "content": user},
                 ],
                 "temperature": 0,
+                "max_tokens": self.max_output_tokens,
                 "response_format": {"type": "json_object"},
             },
         )
@@ -427,6 +458,7 @@ def build_provider_adapter(
             settings.cloudflare_account_id.get_secret_value(),
             secret,
             timeout_seconds=settings.provider_timeout_seconds,
+            max_output_tokens=settings.provider_max_output_tokens,
             client=client,
         )
     if secret is None:
@@ -436,6 +468,7 @@ def build_provider_adapter(
             model_id,
             secret,
             timeout_seconds=settings.provider_timeout_seconds,
+            max_output_tokens=settings.provider_max_output_tokens,
             client=client,
         )
     if provider == "modelscope":
@@ -446,6 +479,7 @@ def build_provider_adapter(
             secret,
             base_url=modelscope_base_url,
             timeout_seconds=settings.provider_timeout_seconds,
+            max_output_tokens=settings.provider_max_output_tokens,
             client=client,
         )
     return OpenAICompatiblePolicyAnswerProvider(
@@ -453,6 +487,7 @@ def build_provider_adapter(
         model_id,
         secret,
         timeout_seconds=settings.provider_timeout_seconds,
+        max_output_tokens=settings.provider_max_output_tokens,
         client=client,
     )
 
