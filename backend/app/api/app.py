@@ -30,7 +30,11 @@ from backend.app.contracts import (
     SupportConversationSummary,
     SupportInboxResponse,
 )
-from backend.app.config import ResolveAISettings, get_settings
+from backend.app.config import (
+    ResolveAISettings,
+    get_settings,
+    validate_trusted_origins,
+)
 from backend.app.ai.answer import PolicyRetriever
 from backend.app.ai.generation import PolicyAnswerProvider
 from backend.app.ai.investigation import InvestigationModel
@@ -72,6 +76,7 @@ from backend.app.services.auth import (
     parse_trusted_proxy_networks,
 )
 from backend.app.db.policies import PolicyIndexUpdateError, PolicyIndexUpdater
+from backend.app.db.conversations import SUPPORTED_ALEMBIC_HEAD
 from backend.app.services.policy_management import PolicyManagementService
 from backend.app.api.staff_models import (
     CreatePolicyRequest,
@@ -145,10 +150,12 @@ def _configured_policy_retriever(database_url: str) -> PolicyRetriever | None:
     return components[0] if components is not None else None
 
 
-def _configured_commerce_repository() -> CommerceRepository | None:
+def _configured_commerce_repository(
+    settings: ResolveAISettings | None = None,
+) -> CommerceRepository | None:
     """Enable imported orders only through an explicit local database URL."""
 
-    commerce_database_url = get_settings().commerce_database_url
+    commerce_database_url = (settings or get_settings()).commerce_database_url
     if not commerce_database_url:
         return None
     return CommerceRepository(commerce_database_url)
@@ -390,10 +397,16 @@ def create_app(
 ) -> FastAPI:
     """Create an API application with configurable local conversation storage."""
 
-    app = FastAPI()
     settings = settings or get_settings()
+    production_environment = settings.environment.casefold() == "production"
     configured_origins = settings.cors_origins
+    validate_trusted_origins(configured_origins, environment=settings.environment)
     allowed_origins = [origin.strip() for origin in configured_origins.split(",") if origin.strip()]
+    app = FastAPI(
+        docs_url=None if production_environment else "/docs",
+        redoc_url=None if production_environment else "/redoc",
+        openapi_url=None if production_environment else "/openapi.json",
+    )
     app.add_middleware(
         CORSMiddleware,
         allow_origins=allowed_origins,
@@ -432,6 +445,18 @@ def create_app(
         return {"status": "ok"}
 
     configured_database_url = database_url or settings.database_url or "sqlite+pysqlite:///:memory:"
+    if production_environment:
+        if settings.demo_auth_enabled:
+            raise ValueError(
+                "production requires RESOLVEAI_DEMO_AUTH_ENABLED=false; "
+                "demo authentication is synthetic-only"
+            )
+        if not settings.production_auth_enabled:
+            raise ValueError("production requires RESOLVEAI_PRODUCTION_AUTH_ENABLED=true")
+        if settings.supported_alembic_head != SUPPORTED_ALEMBIC_HEAD:
+            raise ValueError("RESOLVEAI_SUPPORTED_ALEMBIC_HEAD must match the code-supported head")
+        if not is_postgresql_url(configured_database_url):
+            raise ValueError("production requires the application database to use PostgreSQL")
     configured_policy_retriever = policy_retriever
     configured_policy_index_updater = policy_index_updater
     if configured_policy_retriever is None and configured_policy_index_updater is None:
@@ -443,8 +468,13 @@ def create_app(
     configured_commerce_repository = (
         commerce_repository
         if commerce_repository is not None
-        else _configured_commerce_repository()
+        else _configured_commerce_repository(settings)
     )
+    if production_environment and configured_commerce_repository is None:
+        raise ValueError(
+            "production requires RESOLVEAI_COMMERCE_DATABASE_URL; "
+            "synthetic order fixtures are local-only"
+        )
     configured_response_provider = (
         response_provider
         if response_provider is not None
@@ -463,12 +493,17 @@ def create_app(
     production_auth: AuthSessionStore | None = None
     if settings.production_auth_enabled:
         try:
+            provisioned_accounts = load_provisioned_accounts(
+                None
+                if settings.production_auth_users_json is None
+                else settings.production_auth_users_json.get_secret_value()
+            )
+            if not provisioned_accounts:
+                raise AuthConfigurationError(
+                    "production authentication requires at least one provisioned account"
+                )
             production_auth = AuthSessionStore(
-                load_provisioned_accounts(
-                    None
-                    if settings.production_auth_users_json is None
-                    else settings.production_auth_users_json.get_secret_value()
-                ),
+                provisioned_accounts,
                 secret_key=(
                     ""
                     if settings.auth_secret_key is None
@@ -602,6 +637,17 @@ def create_app(
         ):
             return _error(403, "csrf_required", "A CSRF token is required.")
         return await call_next(request)
+
+    @app.middleware("http")
+    async def sanitized_error_middleware(
+        request: Request, call_next: Callable[[Request], Awaitable[Response]]
+    ) -> Response:
+        """Keep unexpected route and middleware failures out of API responses."""
+
+        try:
+            return await call_next(request)
+        except Exception:
+            return _error(500, "internal_error", "An internal server error occurred.")
 
     @app.get("/readyz")
     async def readinesscheck():

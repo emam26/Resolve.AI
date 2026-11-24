@@ -22,6 +22,12 @@ def test_healthcheck_is_public_and_does_not_expose_dependencies() -> None:
     assert "database" not in response.text
 
 
+def test_local_development_keeps_public_api_docs_available() -> None:
+    client = TestClient(create_app())
+
+    assert client.get("/docs").status_code == 200
+
+
 def test_readiness_reports_database_status_without_sensitive_details(
     monkeypatch,
 ) -> None:
@@ -46,3 +52,24 @@ def test_readiness_fails_when_configured_commerce_database_is_unavailable() -> N
     assert response.status_code == 503
     assert response.json() == {"status": "not_ready"}
     assert "commerce" not in response.text.lower()
+
+
+def test_unexpected_errors_return_a_sanitized_structured_response(monkeypatch) -> None:
+    client = TestClient(create_app())
+
+    def explode(token):
+        del token
+        raise RuntimeError("database password=must-not-leak")
+
+    monkeypatch.setattr(client.app.state.service, "actor_for_session", explode)
+    response = client.get("/api/v1/me", headers={"Authorization": "Bearer invalid"})
+
+    assert response.status_code == 500
+    assert response.json() == {
+        "error": {
+            "code": "internal_error",
+            "message": "An internal server error occurred.",
+            "details": {},
+        }
+    }
+    assert "must-not-leak" not in response.text

@@ -7,6 +7,8 @@ from unittest.mock import Mock
 import pytest
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
+from sqlalchemy import create_engine
+from sqlalchemy.pool import StaticPool
 
 from backend.app.api import create_app
 from backend.app.config import ResolveAISettings
@@ -23,7 +25,13 @@ from backend.app.services.auth import (
 )
 
 
-def _settings(*, login_limit: int = 10) -> ResolveAISettings:
+def _settings(
+    *,
+    login_limit: int = 10,
+    environment: str = "local",
+    database_url: str | None = None,
+    cors_origins: str | None = None,
+) -> ResolveAISettings:
     password_hash = hash_password("correct horse battery staple")
     users = json.dumps(
         [
@@ -40,6 +48,14 @@ def _settings(*, login_limit: int = 10) -> ResolveAISettings:
     )
     return ResolveAISettings(
         _env_file=None,
+        environment=environment,
+        database_url=database_url,
+        cors_origins=cors_origins
+        or (
+            "https://resolveai.example"
+            if environment == "production"
+            else "http://localhost:5173,http://127.0.0.1:5173"
+        ),
         production_auth_enabled=True,
         demo_auth_enabled=False,
         auth_secret_key="s" * 32,
@@ -114,6 +130,47 @@ def test_production_requires_postgresql_for_durable_auth_state() -> None:
             production_auth_users_json="[]",
             database_url="sqlite+pysqlite:///:memory:",
         )
+
+
+def test_production_bootstrap_rejects_a_sqlite_database_override() -> None:
+    settings = _settings(
+        environment="production",
+        database_url="postgresql+psycopg://user:password@localhost/resolveai",
+    )
+
+    with pytest.raises(ValueError, match="PostgreSQL"):
+        create_app(database_url="sqlite+pysqlite:///:memory:", settings=settings)
+
+
+def test_production_hides_swagger_redoc_and_openapi_routes(monkeypatch) -> None:
+    settings = _settings(
+        environment="production",
+        database_url="postgresql+psycopg://user:password@localhost/resolveai",
+    )
+    local_engine = create_engine(
+        "sqlite+pysqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    monkeypatch.setattr(
+        "backend.app.services.in_memory.create_database_engine",
+        lambda database_url: local_engine,
+    )
+    client = TestClient(create_app(settings=settings, commerce_repository=Mock()))
+
+    assert client.get("/docs").status_code == 404
+    assert client.get("/redoc").status_code == 404
+    assert client.get("/openapi.json").status_code == 404
+
+
+def test_production_rejects_missing_commerce_database_configuration() -> None:
+    settings = _settings(
+        environment="production",
+        database_url="postgresql+psycopg://user:password@localhost/resolveai",
+    )
+
+    with pytest.raises(ValueError, match="COMMERCE_DATABASE_URL|synthetic order fixtures"):
+        create_app(settings=settings)
 
 
 def test_login_rate_limit_returns_retry_guidance_and_ignores_spoofed_forwarding() -> None:

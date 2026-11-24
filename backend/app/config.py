@@ -8,8 +8,10 @@ local configuration and supplies credentials.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlsplit
 
 from pydantic import AliasChoices, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -27,6 +29,35 @@ ProviderName = Literal[
     "agnes",
     "chutes",
 ]
+
+
+def validate_trusted_origins(value: str, *, environment: str) -> None:
+    """Require explicit secure browser origins for a public deployment."""
+
+    if environment.casefold() != "production":
+        return
+    origins = [origin.strip() for origin in value.split(",") if origin.strip()]
+    if not origins:
+        raise ValueError("production requires at least one trusted CORS origin")
+    for origin in origins:
+        try:
+            parsed = urlsplit(origin)
+            hostname = parsed.hostname
+            parsed.port  # Force validation of malformed explicit ports.
+        except ValueError as error:
+            raise ValueError("production CORS origins must be valid HTTPS origins") from error
+        if (
+            origin == "*"
+            or "*" in origin
+            or parsed.scheme.casefold() != "https"
+            or not hostname
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.path
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise ValueError("production CORS origins must be valid HTTPS origins")
 
 
 class ResolveAISettings(BaseSettings):
@@ -346,11 +377,24 @@ class ResolveAISettings(BaseSettings):
             raise ValueError(
                 "production requires RESOLVEAI_DATABASE_URL to use PostgreSQL"
             )
+        validate_trusted_origins(self.cors_origins, environment=self.environment)
         if self.environment.casefold() == "production" and self.production_auth_enabled:
             if self.auth_secret_key is None or len(self.auth_secret_key.get_secret_value().encode("utf-8")) < 32:
                 raise ValueError("production authentication requires a 32-byte auth secret")
             if self.production_auth_users_json is None:
                 raise ValueError("production authentication requires provisioned accounts")
+            try:
+                configured_accounts = json.loads(
+                    self.production_auth_users_json.get_secret_value()
+                )
+            except (TypeError, json.JSONDecodeError) as error:
+                raise ValueError(
+                    "production authentication requires a valid account list"
+                ) from error
+            if not isinstance(configured_accounts, list) or not configured_accounts:
+                raise ValueError(
+                    "production authentication requires at least one provisioned account"
+                )
         return self
 
     @field_validator(

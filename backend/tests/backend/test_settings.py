@@ -123,3 +123,32 @@ def test_production_rejects_predictable_demo_authentication() -> None:
 def test_production_requires_the_code_supported_migration_head() -> None:
     with pytest.raises(ValidationError, match="code-supported head"):
         ResolveAISettings(_env_file=None, supported_alembic_head="20261124_08")
+
+
+@pytest.mark.parametrize("origins", ["", "*", "http://resolveai.example"])
+def test_production_requires_explicit_https_trusted_origins(origins: str) -> None:
+    with pytest.raises(ValidationError, match="HTTPS origins|trusted CORS origin"):
+        ResolveAISettings(
+            _env_file=None,
+            environment="production",
+            database_url="postgresql+psycopg://user:password@localhost/resolveai",
+            production_auth_enabled=True,
+            demo_auth_enabled=False,
+            auth_secret_key="s" * 32,
+            production_auth_users_json="[{}]",
+            cors_origins=origins,
+        )
+
+
+def test_production_requires_at_least_one_provisioned_account() -> None:
+    with pytest.raises(ValidationError, match="at least one provisioned account"):
+        ResolveAISettings(
+            _env_file=None,
+            environment="production",
+            database_url="postgresql+psycopg://user:password@localhost/resolveai",
+            production_auth_enabled=True,
+            demo_auth_enabled=False,
+            auth_secret_key="s" * 32,
+            production_auth_users_json="[]",
+            cors_origins="https://resolveai.example",
+        )
