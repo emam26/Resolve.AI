@@ -32,6 +32,30 @@ The Locust probes used `scripts/locustfile.py`, a temporary local Uvicorn
 process, `RESOLVEAI_LOCUST_MAX_SECONDS=10`, and the `load`, `stress`, and
 `soak` profiles. The process was terminated after the probes.
 
+## M18-FIX remediation evidence (local, no live providers)
+
+| Date | Evidence | Result | Limits |
+|---|---|---|---|
+| 2026-11-24 | Alembic against disposable PostgreSQL 16/pgvector | Downgrade to `20261124_07`, upgrade to `20261124_08`, and `alembic current` at `20261124_08 (head)` | Isolated local database only |
+| 2026-11-24 | PostgreSQL quota/concurrency suite | `backend/tests/backend/test_m18_fix_quota_postgres.py`: 2 passed | Synthetic quota rows; no provider requests |
+| 2026-11-24 | PostgreSQL policy/persistence/quota suite | 324 passed, 1 intentional skip | Full backend tests with the separate structured-commerce test excluded because its imported dataset was not loaded into this disposable DB; no live provider calls |
+| 2026-11-24 | Default backend regression | 295 passed, 39 skipped, 13.53 s | Skips are existing optional PostgreSQL/commerce inputs; no live provider calls |
+| 2026-11-24 | Instrumented Locust load smoke | 48 observed requests, 0 failures, 3 s, maximum simulated users 6 | Setup requests were observed before `--reset-stats`; application CPU/RAM, DB connections, queue depth, provider distribution, quota contention, fallback frequency, saturation, and recovery telemetry were unavailable and explicitly reported as such |
+
+The PostgreSQL quota test initially exposed a real deadlock between concurrent
+startup reconciliation and quota completion. The fix uses a short
+database-scoped advisory lock around quota-control transactions; the rerun
+passed. A combined run against the empty disposable database produced three
+data-dependent failures in the separate structured-commerce tests because
+their imported evaluation records were not seeded there; those failures are
+not counted as M18-FIX passes.
+
+The bounded independent re-review completed with **PASS** for the synthetic
+evaluation safety gate after the quota ceilings, conservative reservation,
+candidate allowlist, adapter completeness, local PostgreSQL, and explicit
+synthetic-only marker fixes. This does not establish provider billing status,
+live inference quality, model qualification, or production readiness.
+
 ## Retrieval and inference evidence
 
 - The verified semantic/pgvector development baseline remains the M15/M16
@@ -48,9 +72,9 @@ process, `RESOLVEAI_LOCUST_MAX_SECONDS=10`, and the `load`, `stress`, and
   quota, billing, and privacy eligibility were not established by the catalog
   responses. Cloudflare and ModelScope were manual-catalog providers.
 - No model was qualified or activated, and no live generation request was
-  made. The owner supplied free-plan status, but the required independent
-  critical-boundary review timed out in this session, so the newly authorized
-  live tranche remains blocked rather than being claimed as evaluated.
+  made. The independent M17/M18 review completed with a FAIL verdict; M18-FIX
+  remediation is not eligible for live generation until a fresh independent
+  re-review accepts the critical quota, accounting, and isolation fixes.
 - The uncommitted provider safety change adds and tests a hard 256-token
   output cap in OpenAI-compatible, Gemini, and Cloudflare request payloads.
 
