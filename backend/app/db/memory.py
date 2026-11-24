@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import re
 from typing import Final
 from uuid import uuid4
 
@@ -27,6 +28,30 @@ MEMORY_PROVENANCES: Final = frozenset(
     {"customer_reported", "conversation_summary", "staff_verified"}
 )
 _INSERT_RETRIES: Final = 3
+_MEMORY_TOKEN_PATTERN: Final = re.compile(r"[a-z0-9]+")
+_MEMORY_STOP_WORDS: Final = frozenset(
+    {
+        "a",
+        "an",
+        "and",
+        "are",
+        "for",
+        "from",
+        "how",
+        "is",
+        "it",
+        "my",
+        "of",
+        "the",
+        "to",
+        "was",
+        "what",
+        "when",
+        "where",
+        "with",
+        "your",
+    }
+)
 
 
 class CustomerMemoryValidationError(ValueError):
@@ -242,6 +267,49 @@ class CustomerMemoryRepository:
                 .limit(bounded_limit)
             ).all()
             return [self._stored(row) for row in rows]
+
+    def select_for_context(
+        self,
+        customer_id: str,
+        query: str,
+        *,
+        limit: int = 5,
+    ) -> list[StoredCustomerMemory]:
+        """Return bounded, customer-scoped memories ranked by lexical relevance.
+
+        This is intentionally small and deterministic: at most the existing
+        customer memory bound is read, query terms never authorize records, and
+        recency breaks relevance ties.  It is continuity context only; policy
+        evidence and live order facts remain authoritative elsewhere.
+        """
+
+        owner = _validate_customer_id(customer_id)
+        if limit < 1:
+            raise ValueError("limit must be positive")
+        bounded_limit = min(limit, self._max_records)
+        query_terms = {
+            token
+            for token in _MEMORY_TOKEN_PATTERN.findall(query.casefold())
+            if token not in _MEMORY_STOP_WORDS
+        }
+        with self._session_factory() as session:
+            rows = session.scalars(
+                select(CustomerMemoryRow)
+                .where(CustomerMemoryRow.customer_id == owner)
+                .order_by(CustomerMemoryRow.slot.desc())
+                .limit(self._max_records)
+            ).all()
+            ranked = sorted(
+                rows,
+                key=lambda row: (
+                    -len(
+                        query_terms
+                        & set(_MEMORY_TOKEN_PATTERN.findall(row.content.casefold()))
+                    ),
+                    -row.slot,
+                ),
+            )
+            return [self._stored(row) for row in ranked[:bounded_limit]]
 
     def count_for_customer(self, customer_id: str) -> int:
         """Return the bounded number of records for one customer."""

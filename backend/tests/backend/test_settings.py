@@ -14,6 +14,7 @@ def test_settings_are_safe_and_external_inference_is_disabled_by_default() -> No
     assert settings.provider_request_quota == 0
     assert settings.provider_token_quota == 0
     assert settings.provider_max_output_tokens == 256
+    assert settings.demo_session_ttl_seconds == 3_600
     assert settings.evaluation_enabled is False
     assert settings.evaluation_request_quota == 0
     assert settings.evaluation_token_quota == 0
@@ -94,3 +95,26 @@ def test_evaluation_budget_cannot_exceed_authorized_tranche() -> None:
         ResolveAISettings(_env_file=None, evaluation_request_quota=49)
     with pytest.raises(ValidationError):
         ResolveAISettings(_env_file=None, evaluation_token_quota=50_001)
+
+
+def test_demo_session_ttl_must_be_bounded_and_positive() -> None:
+    with pytest.raises(ValidationError):
+        ResolveAISettings(_env_file=None, demo_session_ttl_seconds=0)
+    with pytest.raises(ValidationError):
+        ResolveAISettings(_env_file=None, demo_session_ttl_seconds=86_401)
+
+
+def test_production_rejects_predictable_demo_authentication() -> None:
+    with pytest.raises(ValidationError, match="demo authentication"):
+        ResolveAISettings(
+            _env_file=None,
+            environment="production",
+            demo_auth_enabled=True,
+        )
+
+    settings = ResolveAISettings(
+        _env_file=None,
+        environment="production",
+        demo_auth_enabled=False,
+    )
+    assert settings.demo_auth_enabled is False

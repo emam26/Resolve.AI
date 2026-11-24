@@ -179,6 +179,26 @@ def test_memory_capacity_does_not_block_a_valid_conversation_message() -> None:
     assert service._memory_repository.count_for_customer("customer_001") == MAX_MEMORY_RECORDS_PER_CUSTOMER  # type: ignore[attr-defined]
 
 
+def test_context_selection_finds_relevant_older_memory_before_recent_unrelated_items(
+    tmp_path: Path,
+) -> None:
+    repository = _repository(tmp_path / "relevance.db")
+    for index in range(10):
+        topic = "delivery delay" if index == 0 else f"unrelated issue {index}"
+        repository.add(
+            customer_id="customer_001",
+            content=f"Issue {index}: {topic}.",
+            provenance="customer_reported",
+        )
+
+    selected = repository.select_for_context(
+        "customer_001", "What happened with the delivery delay?", limit=5
+    )
+
+    assert selected[0].content == "Issue 0: delivery delay."
+    assert len(selected) == 5
+
+
 def test_memory_read_failure_degrades_to_empty_context_without_blocking_message(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -195,10 +215,15 @@ def test_memory_read_failure_degrades_to_empty_context_without_blocking_message(
     )
     assert conversation is not None
 
-    def unavailable(_customer_id: str) -> list[object]:
+    def unavailable(
+        _customer_id: str,
+        _query: str,
+        *,
+        limit: int = 5,
+    ) -> list[object]:
         raise SQLAlchemyError("synthetic memory outage")
 
-    monkeypatch.setattr(service._memory_repository, "list_for_customer", unavailable)
+    monkeypatch.setattr(service._memory_repository, "select_for_context", unavailable)
 
     response = service.append_message(conversation.conversation_id, "shipment delayed", actor)
 

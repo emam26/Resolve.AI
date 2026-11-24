@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
+import time
 
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -269,8 +270,12 @@ class InMemoryResolveService:
         investigation_model: InvestigationModel | None = None,
         commerce_repository: CommerceRepository | None = None,
         policy_index_updater: PolicyIndexUpdater | None = None,
+        session_ttl_seconds: int = 3_600,
     ) -> None:
-        self._sessions: dict[str, str] = {}
+        if session_ttl_seconds <= 0:
+            raise ValueError("session_ttl_seconds must be positive")
+        self._session_ttl_seconds = session_ttl_seconds
+        self._sessions: dict[str, tuple[str, float]] = {}
         self._policy_retriever = policy_retriever
         self._response_provider = response_provider
         self._investigation_model = investigation_model or _DemoInvestigationModel()
@@ -368,17 +373,37 @@ class InMemoryResolveService:
         session_id = session_by_actor.get(demo_actor_id)
         if session_id is None:
             return None
-        self._sessions[session_id] = demo_actor_id
+        self._sessions[session_id] = (
+            demo_actor_id,
+            time.monotonic() + self._session_ttl_seconds,
+        )
         return DemoLoginResponse(
             session_id=session_id,
             actor=self.actor_summary(demo_actor_id),
         )
 
     def actor_for_session(self, session_id: str | None) -> ActorSummary | None:
-        actor_id = None if session_id is None else self._sessions.get(session_id)
-        if actor_id is None:
+        if session_id is None:
+            return None
+        session = self._sessions.get(session_id)
+        if session is None:
+            return None
+        actor_id, expires_at = session
+        if time.monotonic() >= expires_at:
+            self._sessions.pop(session_id, None)
             return None
         return self.actor_summary(actor_id)
+
+    def logout(self, session_id: str | None) -> bool:
+        """Invalidate one active demo session without exposing its actor."""
+
+        if session_id is None:
+            return False
+        session = self._sessions.pop(session_id, None)
+        if session is None:
+            return False
+        _, expires_at = session
+        return time.monotonic() < expires_at
 
     def database_ready(self) -> bool:
         """Expose only a boolean dependency check to the HTTP readiness route."""
@@ -632,7 +657,9 @@ class InMemoryResolveService:
             raise ConversationStateConflict("resolved conversations are read-only")
         message = updated.messages[-1]
         try:
-            prior_memory = self._memory_repository.list_for_customer(actor.customer_id or "")
+            prior_memory = self._memory_repository.select_for_context(
+                actor.customer_id or "", content, limit=5
+            )
         except (CustomerMemoryValidationError, SQLAlchemyError, OSError) as error:
             # Memory is optional continuity context. A database/read outage must
             # not block the authorized customer investigation or reveal details.

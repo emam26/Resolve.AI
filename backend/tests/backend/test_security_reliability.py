@@ -3,6 +3,8 @@ from __future__ import annotations
 from fastapi.testclient import TestClient
 
 from backend.app.api import create_app
+from backend.app.services import in_memory as in_memory_module
+from backend.app.services.in_memory import InMemoryResolveService
 
 
 def _login(client: TestClient, actor_id: str) -> str:
@@ -110,6 +112,46 @@ def test_protected_routes_reject_missing_empty_malformed_and_unknown_bearers() -
             headers = {} if authorization is None else {"Authorization": authorization}
             response = client.request(method, path, headers=headers, json=payload)
             _assert_error(response, 401, "unauthenticated")
+
+
+def test_logout_invalidates_the_authenticated_demo_session() -> None:
+    client = TestClient(create_app())
+    session = _login(client, "customer_001")
+    headers = _headers(session)
+
+    logged_out = client.post("/api/v1/auth/logout", headers=headers)
+
+    assert logged_out.status_code == 204
+    assert logged_out.text == ""
+    _assert_error(client.get("/api/v1/me", headers=headers), 401, "unauthenticated")
+    _assert_error(client.post("/api/v1/auth/logout", headers=headers), 401, "unauthenticated")
+
+
+def test_demo_login_respects_the_existing_disable_switch(monkeypatch) -> None:
+    monkeypatch.setenv("RESOLVEAI_DEMO_AUTH_ENABLED", "false")
+    client = TestClient(create_app())
+
+    response = client.post(
+        "/api/v1/auth/demo-login", json={"demo_actor_id": "customer_001"}
+    )
+
+    _assert_error(response, 404, "not_found")
+
+
+def test_demo_session_expires_without_revealing_or_reusing_the_actor(
+    monkeypatch,
+) -> None:
+    now = [1_000.0]
+    monkeypatch.setattr(in_memory_module.time, "monotonic", lambda: now[0])
+    service = InMemoryResolveService(session_ttl_seconds=30)
+    login = service.demo_login("customer_001")
+    assert login is not None
+    assert service.actor_for_session(login.session_id) is not None
+
+    now[0] = 1_030.0
+
+    assert service.actor_for_session(login.session_id) is None
+    assert service.logout(login.session_id) is False
 
 
 def test_invalid_bearers_cannot_create_or_append_persistent_state() -> None:

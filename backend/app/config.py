@@ -11,7 +11,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Literal
 
-from pydantic import AliasChoices, Field, SecretStr, field_validator
+from pydantic import AliasChoices, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -263,6 +263,23 @@ class ResolveAISettings(BaseSettings):
         validation_alias=AliasChoices("RESOLVEAI_AUTH_SECRET_KEY", "AUTH_SECRET_KEY"),
     )
     demo_auth_enabled: bool = Field(default=True, validation_alias="RESOLVEAI_DEMO_AUTH_ENABLED")
+    demo_session_ttl_seconds: int = Field(
+        default=3_600,
+        gt=0,
+        le=86_400,
+        validation_alias="RESOLVEAI_DEMO_SESSION_TTL_SECONDS",
+    )
+
+    @model_validator(mode="after")
+    def reject_demo_auth_in_production(self) -> "ResolveAISettings":
+        """Prevent accidentally exposing predictable synthetic sessions."""
+
+        if self.environment.casefold() == "production" and self.demo_auth_enabled:
+            raise ValueError(
+                "production requires RESOLVEAI_DEMO_AUTH_ENABLED=false; "
+                "demo authentication is synthetic-only"
+            )
+        return self
 
     @field_validator(
         "groq_api_key",

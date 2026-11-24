@@ -417,6 +417,7 @@ def create_app(
         investigation_model=investigation_model,
         commerce_repository=configured_commerce_repository,
         policy_index_updater=configured_policy_index_updater,
+        session_ttl_seconds=settings.demo_session_ttl_seconds,
     )
     policy_management = PolicyManagementService(repository=service.policy_repository)
     app.state.service = service
@@ -469,6 +470,8 @@ def create_app(
 
     @router.post("/auth/demo-login", response_model=DemoLoginResponse)
     async def demo_login(request: DemoLoginRequest):
+        if not settings.demo_auth_enabled:
+            return _error(404, "not_found", "The requested resource was not found.")
         response = service.demo_login(request.demo_actor_id)
         if response is None:
             return _error(
@@ -477,6 +480,12 @@ def create_app(
                 "The requested demo actor is not available.",
             )
         return response
+
+    @router.post("/auth/logout", status_code=204)
+    async def logout(authorization: str | None = Header(default=None)):
+        if not service.logout(_bearer_token(authorization)):
+            return _error(401, UNAUTHENTICATED["code"], UNAUTHENTICATED["message"])
+        return Response(status_code=204)
 
     @router.get("/me")
     async def get_me(authorization: str | None = Header(default=None)):
