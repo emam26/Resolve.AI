@@ -1,4 +1,4 @@
-import { Icon, PageHeading, type Surface } from "./DesignShell";
+import { Icon, PageHeading, policyStatusLabel, roleLabel, type Surface } from "./DesignShell";
 import { FormEvent, useEffect, useState } from "react";
 import {
   ApiError,
@@ -36,6 +36,7 @@ interface WorkspaceSurfaceProps {
   onLogout: () => void;
   isLoggingOut: boolean;
   navigate: (surface: Surface) => void;
+  production: boolean;
 }
 
 type ViewError = {
@@ -54,7 +55,7 @@ function errorFrom(error: unknown): ViewError {
       details: error.details,
     };
   }
-  return { kind: "error", message: "The local API returned an unreadable response." };
+  return { kind: "error", message: "ResolveAI returned an unreadable response." };
 }
 
 function formatDate(value: string | null): string {
@@ -65,18 +66,18 @@ function formatDate(value: string | null): string {
     : new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(date);
 }
 
-function WorkspaceLogin({ isStarting, onStartSession }: Pick<WorkspaceSurfaceProps, "isStarting" | "onStartSession">) {
+function WorkspaceLogin({ isStarting, onStartSession, production }: Pick<WorkspaceSurfaceProps, "isStarting" | "onStartSession" | "production">) {
   return (
     <section className="workspace-login" aria-labelledby="workspace-login-title">
       <div className="workspace-icon" aria-hidden="true">W</div>
       <div>
         <p className="section-label">Authorized workspace session</p>
         <h2 id="workspace-login-title">Open the merchant workspace</h2>
-        <p className="muted">The local API will establish the synthetic merchant-admin identity. No browser-supplied role is trusted.</p>
+        <p className="muted">{production ? "Your authorized merchant workspace is not available yet." : "The local API will establish the synthetic merchant-admin identity. No browser-supplied role is trusted."}</p>
       </div>
-      <button className="primary-button" type="button" onClick={onStartSession} disabled={isStarting}>
+      {!production && <button className="primary-button" type="button" onClick={onStartSession} disabled={isStarting}>
         {isStarting ? "Opening workspace…" : "Start Demo Workspace session"}
-      </button>
+      </button>}
     </section>
   );
 }
@@ -95,7 +96,7 @@ function ViewNotice({ error }: { error: ViewError }) {
   );
 }
 
-function OverviewView({ sessionId, navigate, name }: { sessionId: string; navigate: (s:Surface)=>void; name:string }) {
+function OverviewView({ sessionId, navigate, name, production }: { sessionId: string; navigate: (s:Surface)=>void; name:string; production:boolean }) {
   const [summary, setSummary] = useState<OpsSummary | null>(null);
   const [published,setPublished]=useState<number|null>(null);
   const [error, setError] = useState<ViewError | null>(null);
@@ -152,7 +153,7 @@ function editorFromPolicy(policy: KnowledgePolicyDetail): PolicyEditorState {
   };
 }
 
-function KnowledgeView({ sessionId, canEdit }: { sessionId: string; canEdit: boolean }) {
+function KnowledgeView({ sessionId, canEdit, production }: { sessionId: string; canEdit: boolean; production:boolean }) {
   const [policies, setPolicies] = useState<KnowledgePolicySummary[]>([]);
   const [selected, setSelected] = useState<KnowledgePolicyDetail | null>(null);
   const [query, setQuery] = useState("");
@@ -376,7 +377,7 @@ function KnowledgeView({ sessionId, canEdit }: { sessionId: string; canEdit: boo
   );
 }
 
-function TeamView({ sessionId, surface }: { sessionId: string; surface: "team"|"settings" }) {
+function TeamView({ sessionId, surface, production }: { sessionId: string; surface: "team"|"settings"; production:boolean }) {
   const [members, setMembers] = useState<WorkspaceTeamMember[]>([]);
   const [settings, setSettings] = useState<WorkspaceSettings | null>(null);
   const [error, setError] = useState<ViewError | null>(null);
@@ -410,19 +411,20 @@ function TeamView({ sessionId, surface }: { sessionId: string; surface: "team"|"
 }
 
 export default function WorkspaceSurface(props: WorkspaceSurfaceProps) {
-  if (!props.session) return <><PageHeading title={{overview:"Overview",knowledge:"Knowledge base",team:"Team & access",settings:"Workspace settings"}[props.activeSurface]} subtitle="Establish a local demo session to view authorized workspace records."/><WorkspaceLogin isStarting={props.isStarting} onStartSession={props.onStartSession} /></>;
+  if (!props.session) return <><PageHeading title={{overview:"Overview",knowledge:"Knowledge base",team:"Team & access",settings:"Workspace settings"}[props.activeSurface]} subtitle={props.production ? "Your authorized workspace is unavailable." : "Establish a local demo session to view authorized workspace records."}/><WorkspaceLogin isStarting={props.isStarting} onStartSession={props.onStartSession} production={props.production} /></>;
   const sessionId = props.session.session_id;
   return (
     <>
+      {props.production && <div className="flag warning production-capability-note"><Icon name="info"/><span><b>Store connection not configured.</b> Live store and payment connections are unavailable for this workspace.</span></div>}
       <div className="workspace-session-toolbar">
         <span>Signed in as {props.session.actor.display_name}</span>
         <button className="secondary-button compact-button" type="button" onClick={props.onLogout} disabled={props.isLoggingOut}>
           {props.isLoggingOut ? "Ending..." : "End session"}
         </button>
       </div>
-      {props.activeSurface === "overview" && <OverviewView sessionId={sessionId} navigate={props.navigate} name={props.session.actor.display_name} />}
-      {props.activeSurface === "knowledge" && <KnowledgeView sessionId={sessionId} canEdit={props.session.actor.role === "merchant_admin"} />}
-      {(props.activeSurface === "team" || props.activeSurface === "settings") && <TeamView sessionId={sessionId} surface={props.activeSurface} />}
+      {props.activeSurface === "overview" && <OverviewView sessionId={sessionId} navigate={props.navigate} name={props.session.actor.display_name} production={props.production} />}
+      {props.activeSurface === "knowledge" && <KnowledgeView sessionId={sessionId} canEdit={props.session.actor.role === "merchant_admin"} production={props.production} />}
+      {(props.activeSurface === "team" || props.activeSurface === "settings") && <TeamView sessionId={sessionId} surface={props.activeSurface} production={props.production} />}
     </>
   );
 }

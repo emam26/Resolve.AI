@@ -15,4 +15,8 @@ html,body,#root{min-height:100%;margin:0}body{font:14px/1.55 Inter,ui-sans-serif
 @media(max-width:1040px) and (min-width:701px){.sidebar .brand .brandsub{display:none}}
 .staff-transcript .customer-message{align-self:flex-end;background:#dff3ec;color:var(--ink);border-radius:13px 13px 3px 13px}.staff-transcript .staff-message{align-self:flex-start;background:#eaf1f8;color:var(--ink);border-radius:13px 13px 13px 3px}.staff-identity .avatar{display:grid;place-items:center}.sidebar .ws-meta span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.sidebar .brand{padding-top:3px;padding-bottom:24px}.sidebar .brandsub{margin-top:2px}.staff-toolbar .avatar{flex:none}
 
+.app-shell.production .workspace-view > .flag.warning:not(.production-capability-note),.app-shell.production .workspace-view .badge.blue{display:none}
+.app-shell.production label:has(input[value*="synthetic"]),.app-shell.production label:has(input[value*="local"]){display:none}
+.production-capability-note{margin-bottom:18px}
+
 .secure-login{min-height:100vh;display:grid;place-items:center;padding:24px;background:var(--canvas)}.secure-login-card{width:min(100%,420px);padding:32px!important}.secure-login-logo{display:block;width:180px;max-height:60px;object-fit:contain;background:var(--nav);border-radius:10px;padding:12px;margin-bottom:26px}.secure-login-card form{margin-top:24px}

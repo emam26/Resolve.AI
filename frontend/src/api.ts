@@ -421,7 +421,7 @@ async function requestJson<T>(
   try {
     response = await fetch(`${apiBaseUrl}${path}`, { ...options, headers, credentials: productionMode ? "include" : "omit" });
   } catch {
-    throw new ApiError(0, "The local API could not be reached.", "network_error");
+    throw new ApiError(0, productionMode ? "The ResolveAI service could not be reached." : "The local API could not be reached.", "network_error");
   }
 
   const payload: unknown = await response.json().catch(() => null);
@@ -751,10 +751,12 @@ export function getWorkspaceSettings(sessionId: string): Promise<WorkspaceSettin
   return requestJson<BackendWorkspaceSettingsResponse>("/api/v1/workspace/settings", {}, sessionId).then((raw) => ({
     settings: {
       merchant_name: raw.merchant_name,
-      environment: raw.database_ready ? "local · ready" : "local · not ready",
+      environment: raw.database_ready
+        ? (productionMode ? "Connected" : "local · ready")
+        : (productionMode ? "Unavailable" : "local · not ready"),
       retrieval_mode: raw.policy_retrieval_mode,
       generation_mode: raw.response_generation_mode,
-      synthetic_data: true,
+      synthetic_data: productionMode ? false : true,
     },
   }));
 }

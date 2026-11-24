@@ -30,7 +30,17 @@ import WorkspaceSurface, { WorkspaceSurfaceName } from "./WorkspaceSurface";
 import "./styles.css";
 import "./reference.css";
 import "./redesign.css";
-import { DesignShell, Icon, PageHeading, isSurface, type Surface } from "./DesignShell";
+import {
+  DesignShell,
+  Icon,
+  PageHeading,
+  conversationStateLabel,
+  isSurface,
+  messageAuthorLabel,
+  roleLabel,
+  refundStateLabel,
+  type Surface,
+} from "./DesignShell";
 import ExtraSurface from "./ExtraSurface";
 
 type NoticeKind = "error" | "denial";
@@ -49,7 +59,12 @@ function noticeFromError(error: unknown): Notice {
       message: error.message,
     };
   }
-  return { kind: "error", message: "Something went wrong while contacting the local API." };
+  return { kind: "error", message: productionMode ? "Something went wrong while contacting ResolveAI." : "Something went wrong while contacting the local API." };
+}
+
+function noticeTitle(notice: Notice): string {
+  if (notice.kind === "denial") return "Request denied";
+  return productionMode ? "Service error" : "Local API error";
 }
 
 function formatTimestamp(value: string): string {
@@ -585,7 +600,7 @@ function Application({productionIdentity,onSignedOut}:{productionIdentity?:DemoL
               />
               <div>
                 <h2 id="chat-title">ShopEase support</h2>
-                <p>Powered by ResolveAI · synthetic demo</p>
+                <p>{productionIdentity ? "Powered by ResolveAI" : "Powered by ResolveAI · synthetic demo"}</p>
               </div>
             </div>
 
@@ -644,7 +659,7 @@ function Application({productionIdentity,onSignedOut}:{productionIdentity?:DemoL
               <>
                 <div className="conversation-meta">
                   <span>Conversation {conversation.conversation_id}</span>
-                  <span className="state-badge">{conversation.state}</span>
+                  <span className="state-badge">{conversationStateLabel(conversation.state, Boolean(productionIdentity))}</span>
                 </div>
                 <div className="transcript" aria-live="polite">
                   {conversation.messages.length === 0 ? (
@@ -657,7 +672,7 @@ function Application({productionIdentity,onSignedOut}:{productionIdentity?:DemoL
                     conversation.messages.map((message) => (
                       <article className={`message ${message.author_type === "customer" ? "customer-message" : "other-message"}`} key={message.message_id}>
                         <div className="message-author">
-                          <span>{message.author_type === "customer" ? "You" : message.author_type}</span>
+                          <span>{message.author_type === "customer" ? "You" : messageAuthorLabel(message.author_type, Boolean(productionIdentity))}</span>
                           <time dateTime={message.created_at}>{formatTimestamp(message.created_at)}</time>
                         </div>
                         <p>{message.content}</p>
@@ -674,7 +689,9 @@ function Application({productionIdentity,onSignedOut}:{productionIdentity?:DemoL
                         <strong>{latestResolution.handoff_reason ? "Human review recommended" : "Grounded answer"}</strong>
                       </div>
                       <span className="state-badge">
-                        {latestResolution.retrieval_mode} · {latestResolution.generation_mode}
+                        {productionIdentity
+                          ? (latestResolution.handoff_reason ? "Needs human review" : latestResolution.evidence.length > 0 ? "Published policy" : "Order information")
+                          : `${latestResolution.retrieval_mode} · ${latestResolution.generation_mode}`}
                       </span>
                     </div>
                     {latestResolution.evidence.length > 0 ? (
@@ -708,11 +725,11 @@ function Application({productionIdentity,onSignedOut}:{productionIdentity?:DemoL
                           ? "Conversation resolved"
                           : "AI support active"}</strong>
                     <p>{conversation.state === "HANDOFF_QUEUED"
-                      ? "Your conversation is queued for the local demo support inbox."
+                      ? productionIdentity ? "Your conversation is queued for support." : "Your conversation is queued for the local demo support inbox."
                       : conversation.state === "HUMAN_ACTIVE"
                         ? "A support agent is handling this conversation."
                         : conversation.state === "RESOLVED"
-                          ? "This conversation is closed in the local demo."
+                          ? productionIdentity ? "This conversation is closed." : "This conversation is closed in the local demo."
                           : "Ask an order or policy question. You can request a human review at any time."}</p>
                   </div>
                   {conversation.state === "AI_ACTIVE" && (
@@ -738,12 +755,12 @@ function Application({productionIdentity,onSignedOut}:{productionIdentity?:DemoL
                 </form>
               </>
             )}
-            {notice && <div className={`notice ${notice.kind}`} role="alert"><strong>{notice.kind === 'denial' ? 'Request denied' : 'Local API error'}</strong><span>{notice.message}</span></div>}
+            {notice && <div className={`notice ${notice.kind}`} role="alert"><strong>{noticeTitle(notice)}</strong><span>{notice.message}</span></div>}
           </section>
         </div></section>;
   if(widgetOnly)return <main className="standalone-widget">{customerView}</main>;
   return <DesignShell allowed={allowed} production={!!productionIdentity} surface={activeSurface} navigate={navigateSurface} actor={activeSurface==='support'?staffSession?.actor.display_name:activeSurface==='refunds'?approverSession?.actor.display_name:activeSurface==='widget-preview'?session?.actor.display_name:workspaceSession?.actor.display_name} handoffs={staffSession?supportInbox.filter(c=>c.state==='HANDOFF_QUEUED').length:undefined} pending={approverSession?refunds.filter(r=>r.state==='PENDING_REVIEW').length:undefined}>
-    {activeSurface==='widget-preview'&&<><PageHeading title="Customer widget preview" subtitle="An embeddable support experience for the merchant storefront." actions={<a className="btn" href="?surface=widget" target="_blank" rel="noopener">Open standalone widget</a>}/><div className="flag soft"><Icon name="info"/> Local synthetic support. No live Shopify or payment request is made.</div>{customerView}</>}
+    {activeSurface==='widget-preview'&&<><PageHeading title="Customer widget preview" subtitle="An embeddable support experience for the merchant storefront." actions={<a className="btn" href="?surface=widget" target="_blank" rel="noopener">Open standalone widget</a>}/><div className="flag soft"><Icon name="info"/> {productionIdentity ? "Customer support preview. No live Shopify or payment request is made." : "Local synthetic support. No live Shopify or payment request is made."}</div>{customerView}</>}
     {activeSurface==='support'&&<section className="staff-panel" aria-labelledby="staff-title">
           <header className="staff-header">
             <div>
@@ -751,7 +768,7 @@ function Application({productionIdentity,onSignedOut}:{productionIdentity?:DemoL
               <h1 id="staff-title" className="heading">Conversations</h1>
               <p>A complete workspace for evidence review, AI handoff and human customer care.</p>
             </div>
-            <span className="staff-demo-pill">{productionIdentity?"Provisioned session":"Local demo only"}</span>
+            <span className="staff-demo-pill">{productionIdentity ? "Merchant workspace" : "Local demo only"}</span>
           </header>
 
           {!staffSession ? (
@@ -773,7 +790,7 @@ function Application({productionIdentity,onSignedOut}:{productionIdentity?:DemoL
                   <span className="avatar">SA</span>
                   <div>
                     <strong>{staffSession.actor.display_name}</strong>
-                    <span>{staffSession.actor.actor_id} · {staffSession.actor.role}</span>
+                    <span>{productionIdentity ? roleLabel(staffSession.actor.role, true) : `${staffSession.actor.actor_id} · ${staffSession.actor.role}`}</span>
                   </div>
                 </div>
                 <button className="secondary-button" type="button" onClick={refreshStaffInbox} disabled={isInboxLoading}>
@@ -796,7 +813,7 @@ function Application({productionIdentity,onSignedOut}:{productionIdentity?:DemoL
                   {isInboxLoading && supportInbox.length === 0 ? (
                     <div className="staff-empty-state">
                       <strong>Loading inbox...</strong>
-                      <span>Checking the local support queue.</span>
+                      <span>{productionIdentity ? "Checking the support queue." : "Checking the local support queue."}</span>
                     </div>
                   ) : supportInbox.length === 0 ? (
                     <div className="staff-empty-state">
@@ -825,7 +842,7 @@ function Application({productionIdentity,onSignedOut}:{productionIdentity?:DemoL
                               <small>{item.conversation_id}</small>
                             </span>
                             <span className="inbox-item-meta">{item.customer_id ?? "Unknown customer"} · {item.order_id ?? "No order"}</span>
-                            <span className="inbox-item-preview">{latestMessage?.content ?? "No messages yet."}</span><span className={`state-badge ${item.state}`}>{item.state}</span></span>
+                            <span className="inbox-item-preview">{latestMessage?.content ?? "No messages yet."}</span><span className={`state-badge ${item.state}`}>{conversationStateLabel(item.state, Boolean(productionIdentity))}</span></span>
                           </button>
                         );
                       })}
@@ -848,7 +865,7 @@ function Application({productionIdentity,onSignedOut}:{productionIdentity?:DemoL
                           <span className="staff-conversation-meta">{selectedSupportConversation.customer_id ?? "Unknown customer"} · {selectedSupportConversation.order_id ?? "No order attached"}</span>
                         </div>
                         <div className="staff-actions">
-                          <span className={`state-badge ${selectedSupportConversation.state}`}>{selectedSupportConversation.state}</span>
+                          <span className={`state-badge ${selectedSupportConversation.state}`}>{conversationStateLabel(selectedSupportConversation.state, Boolean(productionIdentity))}</span>
                           {selectedSupportConversation.state === "HUMAN_ACTIVE" && (
                             <button className="secondary-button compact-button" type="button" onClick={resolveSelectedConversation} disabled={isResolving}>
                               {isResolving ? "Resolving..." : "Resolve"}
@@ -870,7 +887,7 @@ function Application({productionIdentity,onSignedOut}:{productionIdentity?:DemoL
                           selectedSupportConversation.messages.map((message) => (
                             <article className={`message ${message.author_type === "staff" ? "staff-message" : message.author_type === "customer" ? "customer-message" : "other-message"}`} key={message.message_id}>
                               <div className="message-author">
-                                <span>{message.author_type === "staff" ? "You (support)" : message.author_type}</span>
+                                <span>{message.author_type === "staff" ? "You (support)" : messageAuthorLabel(message.author_type, Boolean(productionIdentity))}</span>
                                 <time dateTime={message.created_at}>{formatTimestamp(message.created_at)}</time>
                               </div>
                               <p>{message.content}</p>
@@ -900,7 +917,7 @@ function Application({productionIdentity,onSignedOut}:{productionIdentity?:DemoL
                             <div className="refund-request-heading">
                               <div>
                                 <span className="section-label">Refund review request</span>
-                                <strong>Prepare a synthetic review</strong>
+                                <strong>{productionIdentity ? "Prepare a review request" : "Prepare a synthetic review"}</strong>
                               </div>
                               <span className="muted">Maximum $50.00</span>
                             </div>
@@ -945,7 +962,7 @@ function Application({productionIdentity,onSignedOut}:{productionIdentity?:DemoL
                       ) : (
                         <div className="staff-state" role="status">
                           <strong>{selectedSupportConversation.state === "RESOLVED" ? "Conversation resolved" : "Claim required"}</strong>
-                          <span>{selectedSupportConversation.state === "RESOLVED" ? "This local demo conversation is closed." : "Claim the conversation to enable a staff reply. AI replies remain off during human handling."}</span>
+                          <span>{selectedSupportConversation.state === "RESOLVED" ? (productionIdentity ? "This conversation is closed." : "This local demo conversation is closed.") : "Claim the conversation to enable a staff reply. AI replies remain off during human handling."}</span>
                         </div>
                       )}
                     </>
@@ -958,7 +975,7 @@ function Application({productionIdentity,onSignedOut}:{productionIdentity?:DemoL
 
           {staffNotice && (
             <div className={`notice ${staffNotice.kind} staff-notice`} role="alert">
-              <strong>{staffNotice.kind === "denial" ? "Request denied" : "Local API error"}</strong>
+              <strong>{noticeTitle(staffNotice)}</strong>
               <span>{staffNotice.message}</span>
             </div>
           )}
@@ -970,7 +987,7 @@ function Application({productionIdentity,onSignedOut}:{productionIdentity?:DemoL
               <h1 className="heading" id="refund-title">Refund approvals</h1>
               <p>Evidence-first decisions with an explicit boundary between approval and external financial action.</p>
             </div>
-            <span className="staff-demo-pill">{productionIdentity?"Provisioned session":"Local demo only"}</span>
+            <span className="staff-demo-pill">{productionIdentity ? "Merchant workspace" : "Local demo only"}</span>
           </header>
 
           {!approverSession ? (
@@ -992,7 +1009,7 @@ function Application({productionIdentity,onSignedOut}:{productionIdentity?:DemoL
                   <span className="avatar">RA</span>
                   <div>
                     <strong>{approverSession.actor.display_name}</strong>
-                    <span>{approverSession.actor.actor_id} · {approverSession.actor.role}</span>
+                    <span>{productionIdentity ? roleLabel(approverSession.actor.role) : `${approverSession.actor.actor_id} · ${approverSession.actor.role}`}</span>
                   </div>
                 </div>
                 <div className="refund-toolbar-actions">
@@ -1031,15 +1048,15 @@ function Application({productionIdentity,onSignedOut}:{productionIdentity?:DemoL
               {isRefundsLoading && refunds.length === 0 ? (
                 <div className="staff-empty-state refund-empty-state">
                   <strong>Loading refund reviews…</strong>
-                  <span>Checking the local approval queue.</span>
+                    <span>{productionIdentity ? "Checking the approval queue." : "Checking the local approval queue."}</span>
                 </div>
               ) : visibleRefunds.length === 0 ? (
                 <div className="staff-empty-state refund-empty-state">
                   <strong>{refundFilter === "pending" ? "No pending reviews" : "No refund decisions yet"}</strong>
-                  <span>{refundFilter === "pending" ? "New synthetic requests will appear here." : "The local API has not returned any review records."}</span>
+                  <span>{refundFilter === "pending" ? (productionIdentity ? "New requests will appear here." : "New synthetic requests will appear here.") : (productionIdentity ? "No review records were returned." : "The local API has not returned any review records.")}</span>
                 </div>
               ) : (
-                <div className="refund-grid" aria-live="polite"><div className="card refund-queue"><div className="pad"><div className="section-title">Review queue</div><div className="section-sub">Separate decision and financial state</div></div>{visibleRefunds.map(item=><button type="button" key={item.refund_id} onClick={()=>setSelectedRefundId(item.refund_id)} className={`refund-item ${selectedRefund?.refund_id===item.refund_id?'selected':''}`}><strong>{item.refund_id}</strong><span className={`state-badge ${item.state}`}>{item.state}</span><p>{item.order_id} · {item.reason}</p><b>{formatCents(item.amount_cents)}</b></button>)}</div><div className="refund-list">
+                <div className="refund-grid" aria-live="polite"><div className="card refund-queue"><div className="pad"><div className="section-title">Review queue</div><div className="section-sub">Separate decision and financial state</div></div>{visibleRefunds.map(item=><button type="button" key={item.refund_id} onClick={()=>setSelectedRefundId(item.refund_id)} className={`refund-item ${selectedRefund?.refund_id===item.refund_id?'selected':''}`}><strong>{item.refund_id}</strong><span className={`state-badge ${item.state}`}>{refundStateLabel(item.state, Boolean(productionIdentity))}</span><p>{item.order_id} · {item.reason}</p><b>{formatCents(item.amount_cents)}</b></button>)}</div><div className="refund-list">
                   {selectedRefund && [selectedRefund].map((refund) => (
                     <article className="refund-card" key={refund.refund_id}>
                       <div className="refund-card-header">
@@ -1048,9 +1065,9 @@ function Application({productionIdentity,onSignedOut}:{productionIdentity?:DemoL
                           <h3>{refund.refund_id}</h3>
                           <p className="refund-card-meta">Order {refund.order_id} · Conversation {refund.conversation_id}</p>
                         </div>
-                        <span className={`state-badge ${refund.state}`}>{refund.state}</span>
+                        <span className={`state-badge ${refund.state}`}>{refundStateLabel(refund.state, Boolean(productionIdentity))}</span>
                       </div>
-                      <div className="refund-amount"><div className="helper">Amount requested</div><div className="refund-total">{formatCents(refund.amount_cents)}</div><div className="helper">USD · synthetic financial data</div></div><div className="refund-card-details refund-sections">
+                      <div className="refund-amount"><div className="helper">Amount requested</div><div className="refund-total">{formatCents(refund.amount_cents)}</div><div className="helper">USD · {productionIdentity ? "review request" : "synthetic financial data"}</div></div><div className="refund-card-details refund-sections">
                         <div>
                           <span className="refund-detail-label">Transaction context</span><strong>Order {refund.order_id}</strong><span>Captured payment and prior refunds not returned by this API.</span>
                         </div>
@@ -1069,7 +1086,7 @@ function Application({productionIdentity,onSignedOut}:{productionIdentity?:DemoL
                           </div>
                         )}
                       </div>
-                      <div className="panel-surface execution-panel"><strong>Execution & reconciliation</strong><div className="kv"><span className="key">Financial action</span><span className="val">Not performed by ResolveAI</span></div><div className="kv"><span className="key">Provider verification</span><span className="val">Unavailable in local demo</span></div></div>{refund.decision_note && <p className="refund-decision-note">{refund.decision_note}</p>}
+                      <div className="panel-surface execution-panel"><strong>Execution & reconciliation</strong><div className="kv"><span className="key">Financial action</span><span className="val">Not performed by ResolveAI</span></div><div className="kv"><span className="key">Provider verification</span><span className="val">{productionIdentity ? "Not connected" : "Unavailable in local demo"}</span></div></div>{refund.decision_note && <p className="refund-decision-note">{refund.decision_note}</p>}
                       {refund.state === "PENDING_REVIEW" ? (
                         <div className="refund-actions">
                           <button
@@ -1101,12 +1118,12 @@ function Application({productionIdentity,onSignedOut}:{productionIdentity?:DemoL
 
           {refundNotice && (
             <div className="notice refund-notice" role="alert">
-              <strong>{refundNotice.kind === "denial" ? "Request denied" : "Local API error"}</strong>
+              <strong>{noticeTitle(refundNotice)}</strong>
               <span>{refundNotice.message}</span>
             </div>
           )}
         </section>}
-    {(['overview','knowledge','team','settings'] as string[]).includes(activeSurface)&&<><WorkspaceSurface activeSurface={activeSurface as WorkspaceSurfaceName} session={workspaceSession} isStarting={isWorkspaceStarting} onStartSession={startWorkspaceSession} onLogout={()=>void endWorkspaceSession()} isLoggingOut={isLoggingOut} navigate={navigateSurface}/>{workspaceLoginNotice&&<div className={`notice ${workspaceLoginNotice.kind}`} role="alert"><strong>Local API error</strong><span>{workspaceLoginNotice.message}</span></div>}</>}
-    {!['overview','knowledge','team','settings','widget-preview','support','refunds'].includes(activeSurface)&&<>{workspaceSession&&<div className="workspace-session-toolbar"><span>Signed in as {workspaceSession.actor.display_name}</span><button className="secondary-button compact-button" onClick={()=>void endWorkspaceSession()} disabled={isLoggingOut}>End session</button></div>}<ExtraSurface supportSession={staffSession} supportInbox={supportInbox} startSupport={startStaffSession} supportStarting={isStaffStarting} endSupport={()=>void endStaffSession()} selectCase={(id)=>{if(!staffSession)return;void loadSupportInbox(staffSession.session_id).then(()=>{setSelectedSupportConversationId(id);navigateSurface("support");});}} key={`${activeSurface}-${workspaceSession?.actor.actor_id??'anonymous'}`} surface={activeSurface} navigate={navigateSurface} session={workspaceSession} startSession={startWorkspaceSession} starting={isWorkspaceStarting} notice={workspaceLoginNotice?.message} /></>}
+    {(['overview','knowledge','team','settings'] as string[]).includes(activeSurface)&&<><WorkspaceSurface activeSurface={activeSurface as WorkspaceSurfaceName} session={workspaceSession} isStarting={isWorkspaceStarting} onStartSession={startWorkspaceSession} onLogout={()=>void endWorkspaceSession()} isLoggingOut={isLoggingOut} navigate={navigateSurface} production={Boolean(productionIdentity)}/>{workspaceLoginNotice&&<div className={`notice ${workspaceLoginNotice.kind}`} role="alert"><strong>{noticeTitle(workspaceLoginNotice)}</strong><span>{workspaceLoginNotice.message}</span></div>}</>}
+    {!['overview','knowledge','team','settings','widget-preview','support','refunds'].includes(activeSurface)&&<>{workspaceSession&&<div className="workspace-session-toolbar"><span>Signed in as {workspaceSession.actor.display_name}</span><button className="secondary-button compact-button" onClick={()=>void endWorkspaceSession()} disabled={isLoggingOut}>End session</button></div>}<ExtraSurface supportSession={staffSession} supportInbox={supportInbox} startSupport={startStaffSession} supportStarting={isStaffStarting} endSupport={()=>void endStaffSession()} selectCase={(id)=>{if(!staffSession)return;void loadSupportInbox(staffSession.session_id).then(()=>{setSelectedSupportConversationId(id);navigateSurface("support");});}} key={`${activeSurface}-${workspaceSession?.actor.actor_id??'anonymous'}`} surface={activeSurface} navigate={navigateSurface} session={workspaceSession} startSession={startWorkspaceSession} starting={isWorkspaceStarting} notice={workspaceLoginNotice?.message} production={Boolean(productionIdentity)} /></>}
   </DesignShell>;
 }
