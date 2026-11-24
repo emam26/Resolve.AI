@@ -16,6 +16,14 @@ button { cursor: pointer; }
 
 button:disabled { cursor: not-allowed; opacity: 0.62; }
 
+button:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible {
+  outline: 3px solid #8ddfd1;
+  outline-offset: 2px;
+}
+
 .page-shell {
   min-height: 100vh;
   padding: 34px;
@@ -50,6 +58,10 @@ button:disabled { cursor: not-allowed; opacity: 0.62; }
 }
 
 .brand-mark { width: 42px; height: 42px; color: #0f3040; background: #40c8b4; font-size: 24px; }
+
+.brand-lockup { width: 142px; height: auto; flex: 0 0 auto; }
+
+.chat-avatar { object-fit: cover; padding: 4px; }
 
 .brand-bar h1, .chat-header h2, .intro-panel h2, .session-card h3, .conversation-start h3 { margin: 0; }
 

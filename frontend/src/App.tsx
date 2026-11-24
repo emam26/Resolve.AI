@@ -443,9 +443,13 @@ export default function App() {
     <main className="page-shell">
       <section className="widget-frame" aria-labelledby="widget-title">
         <header className="brand-bar">
-          <div className="brand-mark" aria-hidden="true">✳</div>
+          <img
+            className="brand-lockup"
+            src="/branding/resolveai-logo-dark.svg"
+            alt="ResolveAI"
+          />
           <div>
-            <p className="eyebrow">ResolveAI · customer operations</p>
+            <p className="eyebrow">Support that remembers</p>
             <h1 id="widget-title">ShopEase support</h1>
           </div>
           <span className="demo-pill">Local demo</span>
@@ -500,7 +504,12 @@ export default function App() {
 
           <section className="chat-card" aria-labelledby="chat-title">
             <div className="chat-header">
-              <div className="chat-avatar" aria-hidden="true">✳</div>
+              <img
+                className="chat-avatar"
+                src="/branding/app-icon-192.png"
+                alt=""
+                aria-hidden="true"
+              />
               <div>
                 <h2 id="chat-title">ShopEase Support</h2>
                 <p>Powered by ResolveAI · synthetic demo</p>
