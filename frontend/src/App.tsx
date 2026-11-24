@@ -18,6 +18,7 @@ import {
   loginDemoMerchantAdmin,
   loginDemoSupport,
   loginDemoCustomer,
+  logoutSession,
   rejectRefund,
   resolveSupportConversation,
   RefundSummary,
@@ -102,6 +103,7 @@ export default function App() {
   const [workspaceSession, setWorkspaceSession] = useState<DemoLoginResponse | null>(null);
   const [isWorkspaceStarting, setIsWorkspaceStarting] = useState(false);
   const [workspaceLoginNotice, setWorkspaceLoginNotice] = useState<Notice | null>(null);
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
 
   async function startDemoSession() {
     setNotice(null);
@@ -117,6 +119,40 @@ export default function App() {
     } finally {
       setIsStarting(false);
     }
+  }
+
+  async function endSession(
+    sessionId: string,
+    clearLocalSession: () => void,
+    showError: (notice: Notice) => void,
+  ) {
+    if (isLoggingOut) return;
+    setIsLoggingOut(true);
+    try {
+      await logoutSession(sessionId);
+    } catch (error) {
+      showError(noticeFromError(error));
+    } finally {
+      // Never retain a bearer credential in the browser after a logout attempt,
+      // including when the server is temporarily unavailable.
+      clearLocalSession();
+      setIsLoggingOut(false);
+    }
+  }
+
+  async function endCustomerSession() {
+    if (!session) return;
+    setNotice(null);
+    await endSession(
+      session.session_id,
+      () => {
+        setSession(null);
+        setConversation(null);
+        setLatestResolution(null);
+        setOrderSummary(null);
+      },
+      setNotice,
+    );
   }
 
   async function beginConversation(event: FormEvent<HTMLFormElement>) {
@@ -237,6 +273,23 @@ export default function App() {
     }
   }
 
+  async function endStaffSession() {
+    if (!staffSession) return;
+    setStaffNotice(null);
+    await endSession(
+      staffSession.session_id,
+      () => {
+        setStaffSession(null);
+        setSupportInbox([]);
+        setSelectedSupportConversationId(null);
+        setStaffDraft("");
+        setSupportRefundNotice(null);
+        setSupportRefundRequestKey(null);
+      },
+      setStaffNotice,
+    );
+  }
+
   async function startWorkspaceSession() {
     setWorkspaceLoginNotice(null);
     setIsWorkspaceStarting(true);
@@ -248,6 +301,16 @@ export default function App() {
     } finally {
       setIsWorkspaceStarting(false);
     }
+  }
+
+  async function endWorkspaceSession() {
+    if (!workspaceSession) return;
+    setWorkspaceLoginNotice(null);
+    await endSession(
+      workspaceSession.session_id,
+      () => setWorkspaceSession(null),
+      setWorkspaceLoginNotice,
+    );
   }
 
   function navigateSurface(surface: AppSurface) {
@@ -406,6 +469,20 @@ export default function App() {
     }
   }
 
+  async function endApproverSession() {
+    if (!approverSession) return;
+    setRefundNotice(null);
+    await endSession(
+      approverSession.session_id,
+      () => {
+        setApproverSession(null);
+        setRefunds([]);
+        setActiveRefundActionId(null);
+      },
+      setRefundNotice,
+    );
+  }
+
   async function refreshRefunds() {
     if (!approverSession || isRefundsLoading) return;
     setRefundNotice(null);
@@ -492,6 +569,14 @@ export default function App() {
                     <strong>{session.actor.display_name}</strong>
                     <span>{session.actor.actor_id} · {session.actor.role}</span>
                   </div>
+                  <button
+                    className="secondary-button compact-button"
+                    type="button"
+                    onClick={() => void endCustomerSession()}
+                    disabled={isLoggingOut}
+                  >
+                    {isLoggingOut ? "Ending..." : "End session"}
+                  </button>
                 </div>
               ) : (
                 <p className="muted">No customer identity has been established yet.</p>
@@ -679,6 +764,8 @@ export default function App() {
               session={workspaceSession}
               isStarting={isWorkspaceStarting}
               onStartSession={startWorkspaceSession}
+              onLogout={() => void endWorkspaceSession()}
+              isLoggingOut={isLoggingOut}
             />
             {workspaceLoginNotice && (
               <div className={`notice ${workspaceLoginNotice.kind}`} role="alert">
@@ -723,6 +810,9 @@ export default function App() {
                 </div>
                 <button className="secondary-button" type="button" onClick={refreshStaffInbox} disabled={isInboxLoading}>
                   {isInboxLoading ? "Refreshing..." : "Refresh inbox"}
+                </button>
+                <button className="secondary-button" type="button" onClick={() => void endStaffSession()} disabled={isLoggingOut}>
+                  {isLoggingOut ? "Ending..." : "End session"}
                 </button>
               </div>
 
@@ -956,6 +1046,9 @@ export default function App() {
                   </div>
                   <button className="secondary-button" type="button" onClick={refreshRefunds} disabled={isRefundsLoading}>
                     {isRefundsLoading ? "Refreshing…" : "Refresh reviews"}
+                  </button>
+                  <button className="secondary-button" type="button" onClick={() => void endApproverSession()} disabled={isLoggingOut}>
+                    {isLoggingOut ? "Ending..." : "End session"}
                   </button>
                 </div>
               </div>

@@ -32,6 +32,8 @@ interface WorkspaceSurfaceProps {
   session: DemoLoginResponse | null;
   isStarting: boolean;
   onStartSession: () => void;
+  onLogout: () => void;
+  isLoggingOut: boolean;
 }
 
 type ViewError = {
@@ -458,7 +460,17 @@ function TeamView({ sessionId }: { sessionId: string }) {
 export default function WorkspaceSurface(props: WorkspaceSurfaceProps) {
   if (!props.session) return <WorkspaceLogin isStarting={props.isStarting} onStartSession={props.onStartSession} />;
   const sessionId = props.session.session_id;
-  if (props.activeSurface === "overview") return <OverviewView sessionId={sessionId} />;
-  if (props.activeSurface === "knowledge") return <KnowledgeView sessionId={sessionId} canEdit={props.session.actor.role === "merchant_admin"} />;
-  return <TeamView sessionId={sessionId} />;
+  return (
+    <>
+      <div className="workspace-session-toolbar">
+        <span>Signed in as {props.session.actor.display_name}</span>
+        <button className="secondary-button compact-button" type="button" onClick={props.onLogout} disabled={props.isLoggingOut}>
+          {props.isLoggingOut ? "Ending..." : "End session"}
+        </button>
+      </div>
+      {props.activeSurface === "overview" && <OverviewView sessionId={sessionId} />}
+      {props.activeSurface === "knowledge" && <KnowledgeView sessionId={sessionId} canEdit={props.session.actor.role === "merchant_admin"} />}
+      {props.activeSurface === "team" && <TeamView sessionId={sessionId} />}
+    </>
+  );
 }

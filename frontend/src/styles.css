@@ -445,6 +445,7 @@ input:focus, textarea:focus { border-color: #4cb8aa; box-shadow: 0 0 0 3px #dff4
 .surface-nav button { border: 1px solid #b9ddd5; border-radius: 999px; padding: 8px 11px; color: #d8f2ed; background: transparent; font-size: 10px; font-weight: 800; }
 .surface-nav button:hover, .surface-nav button.active { color: #0f514e; background: #d8f2ed; }
 .workspace-login, .workspace-view { margin: 0 60px 36px; }
+.workspace-session-toolbar { display: flex; align-items: center; justify-content: flex-end; gap: 12px; margin: 0 60px 12px; color: #5b7c84; font-size: 11px; }
 .workspace-login { display: flex; align-items: center; gap: 16px; padding: 28px; border: 1px solid #d5e4e1; border-radius: 16px; background: #fff; }
 .workspace-login h2, .workspace-view h2 { margin: 0; color: #183b4b; font-size: 24px; letter-spacing: -0.03em; }
 .workspace-login .muted { max-width: 600px; margin: 5px 0 0; }
@@ -530,6 +531,7 @@ input:focus, textarea:focus { border-color: #4cb8aa; box-shadow: 0 0 0 3px #dff4
 
 @media (max-width: 900px) {
   .workspace-login, .workspace-view { margin-right: 28px; margin-left: 28px; }
+  .workspace-session-toolbar { margin-right: 28px; margin-left: 28px; }
   .metric-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .policy-editor-meta { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .policy-editor-sections fieldset { grid-template-columns: 1fr; }
@@ -538,6 +540,7 @@ input:focus, textarea:focus { border-color: #4cb8aa; box-shadow: 0 0 0 3px #dff4
 @media (max-width: 560px) {
   .surface-nav { width: 100%; justify-content: flex-start; margin-left: 0; }
   .workspace-login, .workspace-view { margin-right: 18px; margin-left: 18px; }
+  .workspace-session-toolbar { align-items: flex-start; flex-wrap: wrap; justify-content: space-between; margin-right: 18px; margin-left: 18px; }
   .workspace-login { align-items: flex-start; flex-wrap: wrap; padding: 20px; }
   .workspace-login .primary-button { width: 100%; margin-left: 0; }
   .workspace-view-heading { flex-direction: column; }

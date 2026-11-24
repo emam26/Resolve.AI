@@ -25,6 +25,11 @@ export interface DemoLoginResponse {
   actor: ActorSummary;
 }
 
+export interface ProductionLoginResponse {
+  actor: ActorSummary;
+  csrf_token: string;
+}
+
 export interface ConversationMessage {
   message_id: string;
   author_type: MessageAuthorType;
@@ -368,6 +373,17 @@ export class ApiError extends Error {
 }
 
 const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL ?? "").replace(/\/$/, "");
+let csrfTokenMemory: string | null = null;
+
+function readableCookie(name: string): string | null {
+  if (typeof document === "undefined") return null;
+  const prefix = `${encodeURIComponent(name)}=`;
+  const value = document.cookie
+    .split(";")
+    .map((entry) => entry.trim())
+    .find((entry) => entry.startsWith(prefix));
+  return value ? decodeURIComponent(value.slice(prefix.length)) : null;
+}
 
 async function requestJson<T>(
   path: string,
@@ -382,10 +398,19 @@ async function requestJson<T>(
   if (sessionId) {
     headers.set("Authorization", `Bearer ${sessionId}`);
   }
+  const method = (options.method ?? "GET").toUpperCase();
+  if (["POST", "PUT", "PATCH", "DELETE"].includes(method)) {
+    const csrfToken = csrfTokenMemory ?? readableCookie("resolveai_csrf");
+    if (csrfToken) headers.set("X-CSRF-Token", csrfToken);
+  }
 
   let response: Response;
   try {
-    response = await fetch(`${apiBaseUrl}${path}`, { ...options, headers });
+    response = await fetch(`${apiBaseUrl}${path}`, {
+      ...options,
+      credentials: "include",
+      headers,
+    });
   } catch {
     throw new ApiError(0, "The local API could not be reached.", "network_error");
   }
@@ -412,6 +437,20 @@ export function loginDemoCustomer(): Promise<DemoLoginResponse> {
   });
 }
 
+export function loginProduction(username: string, password: string): Promise<ProductionLoginResponse> {
+  return requestJson<ProductionLoginResponse>("/api/v1/auth/login", {
+    method: "POST",
+    body: JSON.stringify({ username, password }),
+  }).then((response) => {
+    csrfTokenMemory = response.csrf_token;
+    return response;
+  });
+}
+
+export function getCurrentActor(): Promise<ActorSummary> {
+  return requestJson<ActorSummary>("/api/v1/me");
+}
+
 export function loginDemoSupport(): Promise<DemoLoginResponse> {
   return requestJson<DemoLoginResponse>("/api/v1/auth/demo-login", {
     method: "POST",
@@ -430,6 +469,12 @@ export function loginDemoMerchantAdmin(): Promise<DemoLoginResponse> {
   return requestJson<DemoLoginResponse>("/api/v1/auth/demo-login", {
     method: "POST",
     body: JSON.stringify({ demo_actor_id: "merchant_admin_001" }),
+  });
+}
+
+export function logoutSession(sessionId: string): Promise<void> {
+  return requestJson<void>("/api/v1/auth/logout", { method: "POST" }, sessionId).then(() => {
+    csrfTokenMemory = null;
   });
 }
 

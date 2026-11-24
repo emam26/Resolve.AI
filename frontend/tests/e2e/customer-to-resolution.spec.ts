@@ -78,3 +78,27 @@ test("customer login shows a safe API failure and keeps controls labeled", async
   await expect(widget.getByRole("alert")).toContainText("Synthetic API unavailable.");
   await expect(widget.getByRole("button", { name: /Start Demo Customer session/ })).toBeEnabled();
 });
+
+test("customer logout revokes the server session without persistent browser storage", async ({ page, request }) => {
+  let logoutAuthorization = "";
+  await page.route("**/api/v1/auth/logout", async (route) => {
+    logoutAuthorization = route.request().headers().authorization ?? "";
+    await route.continue();
+  });
+
+  await page.goto("/");
+  const widget = page.locator('section[aria-labelledby="widget-title"]');
+  await widget.getByRole("button", { name: /Start Demo Customer session/ }).click();
+  await expect(widget.getByRole("button", { name: "End session" })).toBeVisible();
+
+  await widget.getByRole("button", { name: "End session" }).click();
+  await expect(widget.getByRole("button", { name: /Start Demo Customer session/ })).toBeVisible();
+  await expect(widget.locator("#order-id")).toHaveCount(0);
+  expect(await page.evaluate(() => ({ local: localStorage.length, session: sessionStorage.length }))).toEqual({ local: 0, session: 0 });
+  expect(logoutAuthorization).toMatch(/^Bearer\s+\S+$/);
+
+  const protectedResponse = await request.get("/api/v1/orders/order_1001", {
+    headers: { Authorization: logoutAuthorization },
+  });
+  expect(protectedResponse.status()).toBe(401);
+});
