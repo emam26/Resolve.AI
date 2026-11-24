@@ -5,6 +5,30 @@ synthetic, local, and tied to the command and environment described below.
 Historical milestone detail remains in [`PROJECT_STATE.md`](PROJECT_STATE.md).
 No protected M16C holdout labels or operational customer records are included.
 
+## M21 release-blocker remediation checkpoint
+
+These checks are local and synthetic. No live provider request, protected
+holdout, deployment, or payment action was performed.
+
+| Evidence | Result | Limits |
+| --- | --- | --- |
+| Backend focused auth/readiness/security checks | `32 passed` | Includes opaque cookie login, CSRF, logout revocation, rate-limit concurrency, trusted-forwarded-IP handling, schema/head checks, malformed-token handling, and existing demo-auth regressions |
+| AI/provider safety checks | `46 passed` | Evaluation remains fail-closed because the historical M19 aggregate usage ledger cannot be reconstructed; no provider calls |
+| Full backend regression | `323 passed, 40 skipped` | PostgreSQL/commerce skips remain because no ResolveAI PostgreSQL test container or URL was available in this run |
+| Frontend typecheck/build | Passed | Local package checks |
+| Frontend focused browser checks | Worker-reported `4 passed` | Existing cached/system Chrome; the lead did not rerun the browser suite after the final API client adjustment |
+| Frontend consolidated browser suite | `18/18 passed` | Installed system Chrome, synthetic local API, after the final M21 client changes |
+| Locust default-admission probe | `70` requests, `60` expected `429` failures after shared-IP login admission | 8 synthetic users on one loopback IP; this validates the brute-force/shared-IP gate, not application throughput |
+| Python compilation, dependency and diff checks | Passed | `compileall`, `pip check`, `git diff --check` |
+| WSL/Docker inspection | WSL/Docker healthy | The claimed `resolveai-m15-pg` container and `resolveai` volume were absent; unrelated CVAT containers were not touched |
+
+The production authentication path uses provisioned scrypt account hashes,
+opaque expiring HttpOnly cookies, CSRF tokens, credentialed CORS, logout
+revocation, and bounded process-local admission controls. Process-local
+sessions/admission are not evidence for a multi-instance deployment. The
+code-owned Alembic head is `20261124_09`; `/readyz` fails closed when the
+configured PostgreSQL schema or revision is missing.
+
 ## Current readiness checkpoint
 
 | Date | Revision | Evidence | Result | Limits |

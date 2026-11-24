@@ -75,18 +75,37 @@ RESOLVEAI_DATABASE_URL=<Neon PostgreSQL URL with pgvector>
 RESOLVEAI_CORS_ORIGINS=https://<Cloudflare Pages hostname>
 RESOLVEAI_DEMO_AUTH_ENABLED=false
 RESOLVEAI_AUTH_SECRET_KEY=<private rotated secret>
+RESOLVEAI_PRODUCTION_AUTH_ENABLED=true
+RESOLVEAI_PRODUCTION_AUTH_USERS_JSON=<private JSON of provisioned scrypt hashes>
+RESOLVEAI_PRODUCTION_SESSION_TTL_SECONDS=3600
+RESOLVEAI_TRUSTED_PROXY_IPS=<only the explicitly trusted proxy CIDRs>
+RESOLVEAI_SUPPORTED_ALEMBIC_HEAD=20261124_09
 RESOLVEAI_EXTERNAL_INFERENCE_ENABLED=false
 RESOLVEAI_ZERO_COST_MODE=true
 RESOLVEAI_PROVIDER_REQUEST_QUOTA=0
 RESOLVEAI_PROVIDER_TOKEN_QUOTA=0
 ```
 
-The current demo authentication is intentionally synthetic and uses predictable
-demo identities/tokens. It is suitable for local owner walkthroughs only. A
-real production identity provider or password/JWT/session implementation,
-login/admission rate limiting, and a readiness check that verifies the expected
-Alembic head are still required before public deployment. Do not treat setting
-`RESOLVEAI_ENVIRONMENT=production` as enabling those controls.
+Local M21 verification adds a provisioned-account path at
+`POST /api/v1/auth/login`. Accounts are configured only in the backend through
+`RESOLVEAI_PRODUCTION_AUTH_USERS_JSON`; each account contains a username,
+actor/role fields and a password hash generated with the repository's
+`backend.app.services.auth.hash_password` helper. The server issues an opaque,
+expiring HttpOnly cookie and a CSRF cookie for browser mutations; the login
+response also returns the non-secret CSRF nonce so a separately hosted
+frontend can retain it in memory when the API-domain cookie is not
+script-readable. Cross-origin clients must send credentials and the CSRF
+header. Do not place
+plaintext passwords, password hashes, or session tokens in Vite variables,
+localStorage, logs, or Git. The synthetic demo login remains local-only and
+must stay disabled in production.
+
+Admission controls are bounded per process. They are suitable for a single
+local process, but a multi-instance deployment still requires shared admission
+storage or an edge limit before it can claim distributed brute-force
+protection. `/readyz` fails closed when PostgreSQL is unavailable, required
+tables are missing, or `alembic_version` is not `20261124_09`; it never runs a
+migration.
 
 For the static frontend, configure only the public API origin:
 
@@ -105,11 +124,11 @@ The local process endpoints are:
 - `GET /healthz`: process health check.
 - `GET /readyz`: local dependency/readiness check.
 
-The current readiness check is not proof that a hosted database is migrated to
-the expected revision. A future deployment should run migrations as a reviewed
-release step and verify the database revision before admitting traffic.
+The readiness check verifies the configured database, required ResolveAI tables,
+and expected Alembic revision. A deployment should still run migrations as a
+reviewed release step and verify readiness before admitting traffic.
 
 ResolveAI does not write refunds to a payment provider. An approved refund
 ends at `APPROVED_EXTERNAL_ACTION_REQUIRED`. Cloud deployment, billing,
-provider qualification, production authentication, hosted database operations,
-and external payment actions remain unverified and out of scope for local V1.
+provider qualification, hosted database operations, and external payment
+actions remain unverified and out of scope for local V1.
