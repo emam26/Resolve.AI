@@ -26,7 +26,7 @@ M20 pass.
 
 | Evidence | Result | Limits |
 | --- | --- | --- |
-| Backend regression | `311 passed, 40 skipped` | Existing optional PostgreSQL/commerce inputs were unavailable in this run |
+| Backend regression | `312 passed, 40 skipped` | Existing optional PostgreSQL/commerce inputs were unavailable in this run |
 | Frontend static checks | Typecheck and production build passed | Local package installation only |
 | Playwright with installed system Chrome | Existing suite `16/16 passed`; added owner screenshot test `1/1 passed` | Synthetic local API; browser executable explicitly configured. A later consolidated 17-test rerun timed out during runner shutdown after enumerating all tests, so it is not counted as a single 17/17 pass |
 | Owner screenshots | Four genuine screenshots captured and inspected: customer widget, overview, knowledge, support inbox | Synthetic UI evidence; no production claim |

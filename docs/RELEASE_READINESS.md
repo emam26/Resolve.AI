@@ -5,7 +5,7 @@ cloud account or paid provider call is enabled by this repository state.
 
 | Gate | Status | Evidence / limitation |
 |---|---|---|
-| Backend regression | PASS for current local tree | M20 rerun: `311 passed, 40 skipped`; the PostgreSQL-backed historical M19 result remains `341 passed, 1 intentional skip` |
+| Backend regression | PASS for current local tree | M20 rerun: `312 passed, 40 skipped`; the PostgreSQL-backed historical M19 result remains `341 passed, 1 intentional skip` |
 | Frontend static verification | PASS | `npm.cmd run typecheck` and `npm.cmd run build` |
 | Browser journeys | PASS (local, split evidence) | Existing suite `16/16` plus owner screenshot test `1/1` with installed system Chrome; synthetic data only. A later consolidated 17-test rerun timed out during runner shutdown and is not counted as a single 17/17 pass |
 | Authentication/authorization and business safeguards | PASS for covered local cases; public deployment blocked | Ownership, staff roles, handoff, refund boundaries, policy visibility, session expiry and logout are covered. Demo sessions remain predictable synthetic identities and are not production authentication. |
