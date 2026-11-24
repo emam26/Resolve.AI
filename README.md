@@ -1,3 +1,9 @@
+<p align="center">
+  <img src="docs/design/app-icon-192.png" alt="ResolveAI" width="72" />
+</p>
+
+<p align="center"><strong>Support that remembers.</strong></p>
+
 # ResolveAI
 
 ResolveAI is an intelligent customer-operations application for a fictional online merchant. It combines a customer support widget, authenticated order context, policy retrieval, human support workflows, and controlled refund review in one small, testable vertical slice.
@@ -132,6 +138,7 @@ The application has no required secrets or live-provider credentials. These opti
 | `RESOLVEAI_SENTENCE_TRANSFORMER_MODEL` | `sentence-transformers/all-MiniLM-L6-v2` | Local sentence-transformers model name; model loading remains local-files-only |
 | `RESOLVEAI_LOCAL_POLICY_MODEL` | unset | Optional local path or cached Transformers model for policy-answer formulation; unset preserves deterministic generation |
 | `RESOLVEAI_LOCAL_POLICY_TIMEOUT_SECONDS` | `8` | Maximum time for one local model response before deterministic fallback; the provider remains closed after a timeout |
+| `RESOLVEAI_DEMO_SESSION_TTL_SECONDS` | `3600` | Lifetime of a local synthetic demo session; production authentication is not provided by this demo route |
 | `RESOLVEAI_COMMERCE_DATABASE_URL` | unset | Explicit PostgreSQL URL for the optional M11A read-only imported-commerce repository; unset retains in-memory order fixtures |
 | `VITE_API_BASE_URL` | empty, same-origin requests | API base URL used by the Vite frontend |
 
@@ -161,6 +168,12 @@ reports `not_run` when no model is configured:
 
 The current development environment contains only the MiniLM embedding cache,
 not a compatible generative model, so no real local-model inference is claimed.
+
+Deployment preparation notes, environment checklists, migration/rollback guidance,
+and the current hosted-model limitations are in
+[`docs/DEPLOYMENT_PREPARATION.md`](docs/DEPLOYMENT_PREPARATION.md).
+The manual synthetic owner walkthrough is in
+[`docs/uat/OWNER_WALKTHROUGH.md`](docs/uat/OWNER_WALKTHROUGH.md).
 
 ### Run the API and frontend
 
@@ -292,7 +305,10 @@ No Shopify or other production commerce integration, real customer data, payment
 - PostgreSQL full-text search is implemented for offline comparison only. It reached 0.30 Recall@3 and is not part of the customer runtime.
 - SQLite remains the default local persistence path. PostgreSQL, Docker/WSL, and browser automation were verified only against disposable synthetic data, not production infrastructure.
 - Demo authentication, seeded identities, and the single fictional merchant are not suitable for production use.
-- The staff knowledge surface is currently a safe read-only catalog over the versioned synthetic corpus; draft editing, publishing, and retrieval-index refresh require a persistent policy-management and audit contract.
+- The staff knowledge surface includes the local policy draft/edit, validation,
+  publication, rollback, indexing, and audit workflow. It remains synthetic
+  and deployment-bound: persistent PostgreSQL/index readiness and production
+  authentication must be verified before public use.
 
 ## Documentation
 

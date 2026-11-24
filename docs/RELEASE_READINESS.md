@@ -5,19 +5,28 @@ cloud account or paid provider call is enabled by this repository state.
 
 | Gate | Status | Evidence / limitation |
 |---|---|---|
-| Backend regression | PASS | M19 default suite: 305 passed, 40 intentional PostgreSQL/commerce skips; PostgreSQL-backed suite: 341 passed, 1 intentional skip |
+| Backend regression | PASS for current local tree | M20 rerun: `311 passed, 40 skipped`; the PostgreSQL-backed historical M19 result remains `341 passed, 1 intentional skip` |
 | Frontend static verification | PASS | `npm.cmd run typecheck` and `npm.cmd run build` |
-| Browser journeys | PASS (local) | M19 suite: 16/16 with the existing cached Chromium executable; synthetic data only |
-| Authentication/authorization and business safeguards | PASS for covered local cases | Backend and browser negative cases cover ownership, staff roles, handoff, refund approval boundaries, policy visibility and conflicts |
+| Browser journeys | PASS (local, split evidence) | Existing suite `16/16` plus owner screenshot test `1/1` with installed system Chrome; synthetic data only. A later consolidated 17-test rerun timed out during runner shutdown and is not counted as a single 17/17 pass |
+| Authentication/authorization and business safeguards | PASS for covered local cases; public deployment blocked | Ownership, staff roles, handoff, refund boundaries, policy visibility, session expiry and logout are covered. Demo sessions remain predictable synthetic identities and are not production authentication. |
 | Health/readiness | PASS for local process checks | `/healthz` and `/readyz` are covered; no hosted dependency claim |
 | Secret protection | PASS | Private `.env` is ignored and untracked; backend-only `SecretStr` settings; provider errors/payload tests redact credentials |
 | Deterministic customer path | PASS | External inference disabled, zero-cost mode enabled, quotas zero by default |
-| PostgreSQL/pgvector | PASS (local M19) | Disposable PostgreSQL 16/pgvector migration reached `20261124_09 (head)`; memory restart/ownership checks and broader backend-backed suite passed 341 with 1 intentional skip |
+| PostgreSQL/pgvector | HISTORICAL PASS; M20 rerun blocked | M19 disposable PostgreSQL 16/pgvector migration reached `20261124_09 (head)`; the M20 WSL rerun returned `Wsl/E_ACCESSDENIED` before a new database test could run |
 | Local load probes | PASS (bounded probe) | 10-second load/stress/soak results are in `BENCHMARKS.md`; not a capacity claim |
 | Hosted model qualification | NOT QUALIFIED | One Groq synthetic candidate was rejected after 1/6 application model-accepted answers; Gemini was excluded because free-tier privacy and exact model quota evidence were not sufficient |
 | Real-model customer quality | NOT VERIFIED | Previous local Gemma quality gate did not pass; deterministic fallback remains default |
-| Independent review | PASS with fixes | M18-FIX safety review passed; M19 review findings on memory integration and output-capacity routing were fixed and re-reviewed; no production-readiness claim |
+| Independent review | CONDITIONAL | M20 read-only review completed: stale memory-outage test was fixed; predictable demo authentication remains a public-deployment blocker; no production-readiness claim |
 | Deployment | NOT IN SCOPE | No push, merge, cloud resource, billing, or deployment was performed |
+
+## M20 owner-acceptance disposition
+
+Local manual UAT can proceed at the URLs in
+[`uat/OWNER_WALKTHROUGH.md`](uat/OWNER_WALKTHROUGH.md). Public deployment is
+not approved: real authentication/session protection, admission rate limiting,
+and migration-aware hosted readiness are still required. Hosted model
+qualification remains blocked by the incomplete M19 usage ledger and the
+absence of account-verified privacy/quota evidence for a new live tranche.
 
 ## Remaining local-V1 gates
 

@@ -16,6 +16,26 @@ No protected M16C holdout labels or operational customer records are included.
 | 2026-11-24 | working tree | Locust stress probe | 441 requests, 0 failures, 48.87 req/s; aggregate p50/p95/p99/max 3/10/55/55 ms | 20 users, 10 s measurement window |
 | 2026-11-24 | working tree | Locust soak smoke | 133 requests, 0 failures, 19.05 req/s; aggregate p50/p95/p99/max 2/12/13/13 ms | 8 users, 10 s measurement window |
 
+## M20 owner-acceptance checkpoint
+
+These results were executed after the M20 local changes, using synthetic data
+and the running local Windows processes. The PostgreSQL rerun was attempted but
+could not start because WSL returned `Wsl/E_ACCESSDENIED`; the historical
+PostgreSQL evidence above and in `PROJECT_STATE.md` is not relabeled as a new
+M20 pass.
+
+| Evidence | Result | Limits |
+| --- | --- | --- |
+| Backend regression | `311 passed, 40 skipped` | Existing optional PostgreSQL/commerce inputs were unavailable in this run |
+| Frontend static checks | Typecheck and production build passed | Local package installation only |
+| Playwright with installed system Chrome | Existing suite `16/16 passed`; added owner screenshot test `1/1 passed` | Synthetic local API; browser executable explicitly configured. A later consolidated 17-test rerun timed out during runner shutdown after enumerating all tests, so it is not counted as a single 17/17 pass |
+| Owner screenshots | Four genuine screenshots captured and inspected: customer widget, overview, knowledge, support inbox | Synthetic UI evidence; no production claim |
+| Memory context benchmark | 50 records; relevance selector recall `1.0000` versus prior last-five recency recall `0.0000`; mean/p50/p95 `0.3256/0.3176/0.3496 ms` | Deterministic SQLite microbenchmark, not a capacity claim |
+| Locust load (5 s) | `93` requests, `0` failures, `18.51` req/s; aggregate p50/p95/p99/max `3/66/89/89 ms` | 8 simulated users; provider/DB/CPU telemetry unavailable |
+| Locust stress (5 s) | `269` requests, `0` failures, `52.65` req/s; aggregate p50/p95/p99/max `4/16/20/21 ms` | 20 simulated users; bounded synthetic probe |
+| Locust soak smoke (5 s) | `94` requests, `0` failures, `18.51` req/s; aggregate p50/p95/p99/max `3/9/71/71 ms` | 8 simulated users; not a long-duration soak |
+| PostgreSQL/WSL rerun | **BLOCKED** | `wsl.exe -d Ubuntu -- docker ps` returned `Wsl/E_ACCESSDENIED`; no M20 PostgreSQL pass is claimed |
+
 Commands:
 
 ```powershell
