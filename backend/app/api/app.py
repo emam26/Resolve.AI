@@ -1,6 +1,5 @@
 """Testable FastAPI routes for the deterministic M1 API slice."""
 
-import os
 from typing import Awaitable, Callable, Literal
 
 from fastapi import Body, FastAPI, Header, Query, Request
@@ -25,6 +24,7 @@ from backend.app.contracts import (
     SupportConversationSummary,
     SupportInboxResponse,
 )
+from backend.app.config import ResolveAISettings, get_settings
 from backend.app.ai.answer import PolicyRetriever
 from backend.app.ai.generation import PolicyAnswerProvider
 from backend.app.ai.investigation import InvestigationModel
@@ -90,18 +90,17 @@ def _bearer_token(authorization: str | None) -> str | None:
 
 def _configured_policy_components(
     database_url: str,
+    settings: ResolveAISettings | None = None,
 ) -> tuple[PolicyRetriever, PolicyIndexUpdater] | None:
     """Configure one shared local embedding provider for retrieval and indexing."""
 
-    if os.getenv("RESOLVEAI_POLICY_RETRIEVAL", "lexical").casefold() != "semantic":
+    settings = settings or get_settings()
+    if settings.policy_retrieval.casefold() != "semantic":
         return None
     if not database_url.startswith(("postgresql", "postgres")):
         return None
     provider = SentenceTransformerEmbeddingProvider(
-        model_name=os.getenv(
-            "RESOLVEAI_SENTENCE_TRANSFORMER_MODEL",
-            "sentence-transformers/all-MiniLM-L6-v2",
-        ),
+        model_name=settings.sentence_transformer_model,
         local_files_only=True,
     )
     return (
@@ -120,7 +119,7 @@ def _configured_policy_retriever(database_url: str) -> PolicyRetriever | None:
 def _configured_commerce_repository() -> CommerceRepository | None:
     """Enable imported orders only through an explicit local database URL."""
 
-    commerce_database_url = os.getenv("RESOLVEAI_COMMERCE_DATABASE_URL")
+    commerce_database_url = get_settings().commerce_database_url
     if not commerce_database_url:
         return None
     return CommerceRepository(commerce_database_url)
@@ -129,20 +128,14 @@ def _configured_commerce_repository() -> CommerceRepository | None:
 def _configured_policy_response_provider() -> PolicyAnswerProvider | None:
     """Opt into a cached, local-only answer model through explicit config."""
 
-    model_name = os.getenv("RESOLVEAI_LOCAL_POLICY_MODEL", "").strip()
+    settings = get_settings()
+    model_name = settings.local_policy_model.strip()
     if not model_name:
         return None
-    timeout_value = os.getenv(
-        "RESOLVEAI_LOCAL_POLICY_TIMEOUT_SECONDS",
-        "8",
-    )
-    try:
-        timeout_seconds = float(timeout_value)
-    except ValueError as error:
-        raise ValueError("RESOLVEAI_LOCAL_POLICY_TIMEOUT_SECONDS must be numeric") from error
     return LocalTransformersPolicyAnswerProvider(
         model_name,
-        timeout_seconds=timeout_seconds,
+        timeout_seconds=settings.local_policy_timeout_seconds,
+        max_new_tokens=settings.local_policy_max_new_tokens,
     )
 
 
@@ -278,10 +271,8 @@ def create_app(
     """Create an API application with configurable local conversation storage."""
 
     app = FastAPI()
-    configured_origins = os.getenv(
-        "RESOLVEAI_CORS_ORIGINS",
-        "http://localhost:5173,http://127.0.0.1:5173",
-    )
+    settings = get_settings()
+    configured_origins = settings.cors_origins
     allowed_origins = [origin.strip() for origin in configured_origins.split(",") if origin.strip()]
     app.add_middleware(
         CORSMiddleware,
@@ -311,13 +302,11 @@ def create_app(
 
         return {"status": "ok"}
 
-    configured_database_url = database_url or os.getenv(
-        "RESOLVEAI_DATABASE_URL", "sqlite+pysqlite:///:memory:"
-    )
+    configured_database_url = database_url or settings.database_url or "sqlite+pysqlite:///:memory:"
     configured_policy_retriever = policy_retriever
     configured_policy_index_updater = policy_index_updater
     if configured_policy_retriever is None and configured_policy_index_updater is None:
-        configured_components = _configured_policy_components(configured_database_url)
+        configured_components = _configured_policy_components(configured_database_url, settings)
         if configured_components is not None:
             configured_policy_retriever, configured_policy_index_updater = configured_components
     elif configured_policy_retriever is None:

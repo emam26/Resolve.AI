@@ -2,6 +2,10 @@
 .env
 .env.*
 !.env.example
+# Keep the same private-env rule explicit for every directory depth.
+**/.env
+**/.env.*
+!**/.env.example
 *.pem
 *.key
 .venv/
