@@ -167,6 +167,42 @@ def test_qualification_requires_cost_privacy_structure_and_quality_gates() -> No
     assert registry.get(unsafe.model_key).lifecycle == "UNVERIFIED"
 
 
+def test_gpt_oss_like_catalog_metadata_is_not_sufficient_for_admission() -> None:
+    """Model family names do not bypass cost, privacy, or output gates."""
+
+    registry = ModelRegistry()
+    candidate = ModelDescriptor(
+        provider="groq",
+        model_id="gpt-oss-20b",
+        capabilities=frozenset({"text"}),
+        # A catalog entry without account-specific evidence must remain
+        # unknown/unsafe, regardless of its model name.
+        structured_output_supported=None,
+        free_eligible=None,
+        privacy_eligible=False,
+    )
+    registry.upsert_discovered([candidate])
+
+    with pytest.raises(QualificationRejected) as error:
+        registry.admit(candidate.model_key, candidate, _evidence())
+
+    message = str(error.value)
+    assert "free entitlement is not verified" in message
+    assert "privacy eligibility is not verified" in message
+    assert "structured output capability is not verified" in message
+    assert registry.get(candidate.model_key).lifecycle == "UNVERIFIED"
+
+    verified = replace(
+        candidate,
+        capabilities=frozenset({"structured_outputs", "text"}),
+        structured_output_supported=True,
+        free_eligible=True,
+        privacy_eligible=True,
+    )
+    registry.upsert_discovered([verified])
+    assert registry.admit(verified.model_key, verified, _evidence()).accepted is True
+
+
 def test_quota_reservation_is_atomic_and_restart_reconciles_in_flight(tmp_path) -> None:
     database_url = f"sqlite+pysqlite:///{tmp_path / 'quota.db'}"
     ledger = QuotaLedger(database_url)

@@ -39,8 +39,18 @@ def build_trusted_evaluation_provider(
     *,
     database_url: str | None = None,
     synthetic_only: bool = False,
+    historical_usage_reconciled: bool = False,
 ) -> RoutedPolicyAnswerProvider:
-    """Build a provider usable only by a trusted synthetic evaluation harness."""
+    """Build a provider usable only by a trusted synthetic evaluation harness.
+
+    The first M19 probe predates the durable quota ledger and did not persist
+    aggregate provider usage.  Keep this factory closed until the owner-run
+    harness explicitly supplies evidence that that historical usage has been
+    reconciled (or that a new, independently approved budget supersedes it).
+    This is deliberately an explicit trusted-harness argument rather than a
+    customer setting or an inferred value; the ordinary application path has
+    no way to establish it.
+    """
 
     if not settings.evaluation_enabled:
         raise ProviderConfigurationError("synthetic evaluation is disabled")
@@ -79,6 +89,10 @@ def build_trusted_evaluation_provider(
         for provider in allowed_providers
     ):
         raise ProviderConfigurationError("evaluation model limit per provider exceeded")
+    if not historical_usage_reconciled:
+        raise ProviderConfigurationError(
+            "historical provider usage is not reconciled; evaluation remains disabled"
+        )
     candidate_key_set = set(candidate_keys)
     configured_database_url = database_url or settings.database_url
     if not configured_database_url or not configured_database_url.startswith(
