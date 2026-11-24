@@ -4,13 +4,16 @@ from concurrent.futures import ThreadPoolExecutor
 import json
 from unittest.mock import Mock
 
+import pytest
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 
 from backend.app.api import create_app
 from backend.app.config import ResolveAISettings
 from backend.app.db.conversations import (
     ConversationRepository,
     REQUIRED_POSTGRES_TABLES,
+    SUPPORTED_ALEMBIC_HEAD,
 )
 from backend.app.services.auth import (
     AdmissionLimiter,
@@ -100,6 +103,19 @@ def test_demo_login_is_not_a_production_auth_fallback() -> None:
     ).status_code == 401
 
 
+def test_production_requires_postgresql_for_durable_auth_state() -> None:
+    with pytest.raises(ValidationError, match="PostgreSQL"):
+        ResolveAISettings(
+            _env_file=None,
+            environment="production",
+            production_auth_enabled=True,
+            demo_auth_enabled=False,
+            auth_secret_key="s" * 32,
+            production_auth_users_json="[]",
+            database_url="sqlite+pysqlite:///:memory:",
+        )
+
+
 def test_login_rate_limit_returns_retry_guidance_and_ignores_spoofed_forwarding() -> None:
     client = TestClient(create_app(settings=_settings(login_limit=2)))
     headers = {"X-Forwarded-For": "203.0.113.20"}
@@ -174,28 +190,28 @@ def _fake_postgres_repository(monkeypatch, *, version: str | None, tables: set[s
     )
     repository = ConversationRepository.__new__(ConversationRepository)
     repository._engine = engine
-    repository._expected_alembic_head = "20261124_09"
+    repository._expected_alembic_head = SUPPORTED_ALEMBIC_HEAD
     return repository
 
 
 def test_postgres_readiness_requires_supported_head_and_schema(monkeypatch) -> None:
     ready = _fake_postgres_repository(
         monkeypatch,
-        version="20261124_09",
+        version=SUPPORTED_ALEMBIC_HEAD,
         tables=set(REQUIRED_POSTGRES_TABLES),
     )
     assert ready.database_ready() is True
 
     stale = _fake_postgres_repository(
         monkeypatch,
-        version="20261124_08",
+        version="20261124_09",
         tables=set(REQUIRED_POSTGRES_TABLES),
     )
     assert stale.database_ready() is False
 
     missing = _fake_postgres_repository(
         monkeypatch,
-        version="20261124_09",
+        version=SUPPORTED_ALEMBIC_HEAD,
         tables=set(REQUIRED_POSTGRES_TABLES) - {"policy_index_jobs"},
     )
     assert missing.database_ready() is False

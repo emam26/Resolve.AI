@@ -1079,6 +1079,13 @@ class PolicyRepository:
             ).all()
             return [self._stored_audit(item) for item in rows]
 
+    def recent_audits(self, *, limit: int = 100) -> list[StoredPolicyAudit]:
+        with self._session_factory() as session:
+            rows = session.scalars(select(PolicyAuditRow).order_by(
+                PolicyAuditRow.created_at.desc(), PolicyAuditRow.audit_id.desc()
+            ).limit(max(1, min(limit, 100)))).all()
+            return [self._stored_audit(row) for row in rows]
+
     def recover_interrupted_indexing(self) -> int:
         with self._session_factory.begin() as session:
             recovered_jobs = []

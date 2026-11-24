@@ -14,6 +14,8 @@ from typing import Literal
 from pydantic import AliasChoices, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from backend.app.db.conversations import SUPPORTED_ALEMBIC_HEAD
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 ProviderName = Literal[
@@ -315,7 +317,7 @@ class ResolveAISettings(BaseSettings):
         validation_alias="RESOLVEAI_REQUEST_RATE_WINDOW_SECONDS",
     )
     supported_alembic_head: str = Field(
-        default="20261124_09",
+        default=SUPPORTED_ALEMBIC_HEAD,
         min_length=1,
         max_length=64,
         validation_alias="RESOLVEAI_SUPPORTED_ALEMBIC_HEAD",
@@ -330,13 +332,19 @@ class ResolveAISettings(BaseSettings):
                 "production requires RESOLVEAI_DEMO_AUTH_ENABLED=false; "
                 "demo authentication is synthetic-only"
             )
-        if self.supported_alembic_head != "20261124_09":
+        if self.supported_alembic_head != SUPPORTED_ALEMBIC_HEAD:
             raise ValueError(
                 "RESOLVEAI_SUPPORTED_ALEMBIC_HEAD must match the code-supported head"
             )
         if self.environment.casefold() == "production" and not self.production_auth_enabled:
             raise ValueError(
                 "production requires RESOLVEAI_PRODUCTION_AUTH_ENABLED=true"
+            )
+        if self.environment.casefold() == "production" and not (
+            self.database_url and self.database_url.startswith(("postgresql", "postgres"))
+        ):
+            raise ValueError(
+                "production requires RESOLVEAI_DATABASE_URL to use PostgreSQL"
             )
         if self.environment.casefold() == "production" and self.production_auth_enabled:
             if self.auth_secret_key is None or len(self.auth_secret_key.get_secret_value().encode("utf-8")) < 32:

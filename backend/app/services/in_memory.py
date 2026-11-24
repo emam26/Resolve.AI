@@ -588,6 +588,20 @@ class InMemoryResolveService:
         order = self._order_for_customer(order_id, actor.customer_id)
         return None if order is None else order.summary
 
+    def order_for_support_case(self, conversation_id: str, actor: ActorSummary) -> OrderSummary | None:
+        if actor.role != "support_agent":
+            raise ForbiddenOperation("case order lookup requires support_agent")
+        record = self._repository.get(conversation_id)
+        if record is None or record.order_id is None:
+            return None
+        if not (record.state == "HANDOFF_QUEUED" or (
+            record.state in {"HUMAN_ACTIVE", "RESOLVED"}
+            and record.assigned_staff_id == actor.actor_id
+        )):
+            return None
+        order = self._order_for_customer(record.order_id, record.owner_customer_id)
+        return None if order is None else order.summary
+
     def _order_for_customer(
         self, order_id: str, customer_id: str | None
     ) -> _AuthorizedOrder | None:

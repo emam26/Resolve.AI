@@ -64,8 +64,10 @@ from backend.app.services.in_memory import (
 from backend.app.services.auth import (
     AdmissionLimiter,
     AuthConfigurationError,
+    AuthStateUnavailable,
     AuthSessionStore,
     client_ip,
+    is_postgresql_url,
     load_provisioned_accounts,
     parse_trusted_proxy_networks,
 )
@@ -473,18 +475,30 @@ def create_app(
                     else settings.auth_secret_key.get_secret_value()
                 ),
                 ttl_seconds=settings.production_session_ttl_seconds,
+                database_url=configured_database_url,
             )
         except AuthConfigurationError:
             # A production configuration error must fail startup rather than
             # silently falling back to synthetic authentication.
             raise
+    # Durable admission state is a production-auth boundary.  Synthetic demo
+    # logins intentionally remain per-process so a persistent PostgreSQL test
+    # database cannot consume the local demo window across independent test
+    # applications or leak admission state between synthetic runs.
+    durable_auth_database_url = (
+        configured_database_url
+        if production_auth is not None and is_postgresql_url(configured_database_url)
+        else None
+    )
     login_limiter = AdmissionLimiter(
         limit=settings.login_rate_limit,
         window_seconds=settings.login_rate_window_seconds,
+        database_url=durable_auth_database_url,
     )
     request_limiter = AdmissionLimiter(
         limit=settings.request_rate_limit,
         window_seconds=settings.request_rate_window_seconds,
+        database_url=durable_auth_database_url,
     )
     trusted_proxy_networks = parse_trusted_proxy_networks(settings.trusted_proxy_ips)
     policy_management = PolicyManagementService(repository=service.policy_repository)
@@ -509,7 +523,12 @@ def create_app(
     def _actor_for_request(request: Request) -> ActorSummary | None:
         token = _production_token(request)
         if production_auth is not None:
-            actor = production_auth.actor_for_session(token)
+            try:
+                actor = production_auth.actor_for_session(token)
+            except AuthStateUnavailable:
+                # Readiness and every protected path fail closed while managed
+                # auth schema is unavailable or has not reached its head.
+                return None
             if actor is not None:
                 return actor
         return service.actor_for_session(_bearer_token(request.headers.get("Authorization")))
@@ -522,12 +541,19 @@ def create_app(
     def _check_login_admission(request: Request | None, username: str) -> JSONResponse | None:
         if request is None:
             return _error(500, "authentication_unavailable", "Authentication is unavailable.")
-        result = login_limiter.check(
-            (
-                f"ip:{_request_ip(request)}",
-                f"username:{username.strip().casefold()[:128]}",
+        try:
+            result = login_limiter.check(
+                (
+                    f"ip:{_request_ip(request)}",
+                    f"username:{username.strip().casefold()[:128]}",
+                )
             )
-        )
+        except AuthStateUnavailable:
+            return _error(
+                503,
+                "authentication_unavailable",
+                "Authentication is unavailable.",
+            )
         return None if result.allowed else _rate_limit_response(result.retry_after_seconds)
 
     @app.middleware("http")
@@ -543,7 +569,14 @@ def create_app(
             keys = [f"ip:{_request_ip(request)}"]
             if actor is not None:
                 keys.append(f"actor:{actor.actor_id}")
-            result = request_limiter.check(keys)
+            try:
+                result = request_limiter.check(keys)
+            except AuthStateUnavailable:
+                return _error(
+                    503,
+                    "request_admission_unavailable",
+                    "Request admission is unavailable.",
+                )
             if not result.allowed:
                 return _rate_limit_response(result.retry_after_seconds)
         return await call_next(request)
@@ -558,9 +591,13 @@ def create_app(
             and cookie_token
             and request.method in {"POST", "PUT", "PATCH", "DELETE"}
             and request.url.path not in {"/api/v1/auth/login", "/api/v1/auth/demo-login"}
-            and not hmac.compare_digest(
-                request.cookies.get(settings.csrf_cookie_name, ""),
-                request.headers.get("X-CSRF-Token", ""),
+            and (
+                not request.cookies.get(settings.csrf_cookie_name)
+                or not request.headers.get("X-CSRF-Token")
+                or not hmac.compare_digest(
+                    request.cookies.get(settings.csrf_cookie_name, "").encode("utf-8"),
+                    request.headers.get("X-CSRF-Token", "").encode("utf-8"),
+                )
             )
         ):
             return _error(403, "csrf_required", "A CSRF token is required.")
@@ -610,7 +647,10 @@ def create_app(
         request = _request_context.get()
         if production_auth is not None and request is not None:
             token = _bearer_token(authorization) or request.cookies.get(settings.auth_cookie_name)
-            actor = production_auth.actor_for_session(token)
+            try:
+                actor = production_auth.actor_for_session(token)
+            except AuthStateUnavailable:
+                return None
             if actor is not None:
                 return actor
         return service.actor_for_session(_bearer_token(authorization))
@@ -672,7 +712,14 @@ def create_app(
         admission = _check_login_admission(http_request, request.username)
         if admission is not None:
             return admission
-        credentials = production_auth.login(request.username, request.password)
+        try:
+            credentials = production_auth.login(request.username, request.password)
+        except AuthStateUnavailable:
+            return _error(
+                503,
+                "authentication_unavailable",
+                "Authentication is unavailable.",
+            )
         if credentials is None:
             return _error(401, "invalid_credentials", "Invalid username or password.")
         token, actor = credentials
@@ -689,9 +736,16 @@ def create_app(
             _bearer_token(authorization)
             or (None if request is None else request.cookies.get(settings.auth_cookie_name))
         )
-        production_logged_out = (
-            production_auth is not None and production_auth.revoke(production_token)
-        )
+        try:
+            production_logged_out = (
+                production_auth is not None and production_auth.revoke(production_token)
+            )
+        except AuthStateUnavailable:
+            return _error(
+                503,
+                "authentication_unavailable",
+                "Authentication is unavailable.",
+            )
         demo_logged_out = service.logout(_bearer_token(authorization))
         if not production_logged_out and not demo_logged_out:
             return _error(401, UNAUTHENTICATED["code"], UNAUTHENTICATED["message"])
@@ -1129,6 +1183,16 @@ def create_app(
             return _error(403, "forbidden", str(exc))
         return PolicyAuditListResponse(events=[PolicyAuditResponse(**event.__dict__) for event in events])
 
+    @router.get("/workspace/policy-audit", response_model=PolicyAuditListResponse)
+    async def workspace_policy_audit(limit: int = Query(default=50, ge=1, le=100), authorization: str | None = Header(default=None)):
+        actor = current_actor(authorization)
+        if actor is None:
+            return _error(401, UNAUTHENTICATED["code"], UNAUTHENTICATED["message"])
+        if actor.role != "merchant_admin":
+            return _error(403, "forbidden", "policy audit requires merchant_admin")
+        events = service.policy_repository.recent_audits(limit=limit)
+        return PolicyAuditListResponse(events=[PolicyAuditResponse(**event.__dict__) for event in events])
+
     @router.get("/workspace/team", response_model=WorkspaceTeamResponse)
     async def workspace_team(authorization: str | None = Header(default=None)):
         actor = current_actor(authorization)
@@ -1158,6 +1222,19 @@ def create_app(
             database_ready=service.database_ready(),
             commerce_database_configured=configured_commerce_repository is not None,
         )
+
+    @router.get("/support/conversations/{conversation_id}/order", response_model=OrderSummary)
+    async def support_case_order(conversation_id: str, authorization: str | None = Header(default=None)):
+        actor = current_actor(authorization)
+        if actor is None:
+            return _error(401, UNAUTHENTICATED["code"], UNAUTHENTICATED["message"])
+        try:
+            order = service.order_for_support_case(conversation_id, actor)
+        except ForbiddenOperation as exc:
+            return _error(403, "forbidden", str(exc))
+        if order is None:
+            return _error(404, "order_not_found", "The requested order was not found.")
+        return order
 
     @router.get("/orders/{order_id}", response_model=OrderSummary)
     async def get_order(order_id: str, authorization: str | None = Header(default=None)):

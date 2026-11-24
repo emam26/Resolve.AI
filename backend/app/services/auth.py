@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 import base64
 import hashlib
 import hmac
@@ -21,6 +22,11 @@ import time
 from typing import Iterable
 
 from backend.app.contracts import ActorSummary
+from backend.app.db.auth import (
+    AuthStateRepository,
+    AuthStateUnavailable,
+    is_postgresql_url,
+)
 
 
 class AuthConfigurationError(ValueError):
@@ -163,12 +169,12 @@ def load_provisioned_accounts(raw_json: str | None) -> tuple[ProvisionedAccount,
 
 
 class AuthSessionStore:
-    """Opaque expiring sessions backed by process memory.
+    """Opaque expiring sessions with a bounded local fallback.
 
-    Tokens are random and only their HMAC digests are retained.  Restarting a
-    process revokes all sessions, which is conservative for a small V1 and
-    avoids introducing another persistence service.  Production deployments
-    should use one process or replace this store with shared session storage.
+    Tokens are random and only their HMAC digests are retained.  PostgreSQL is
+    used when configured so sessions survive restart and are shared by app
+    instances.  SQLite/offline callers retain the intentionally bounded
+    process-local behavior used by deterministic tests.
     """
 
     def __init__(
@@ -177,6 +183,8 @@ class AuthSessionStore:
         *,
         secret_key: str,
         ttl_seconds: int,
+        database_url: str | None = None,
+        state_repository: AuthStateRepository | None = None,
     ) -> None:
         if len(secret_key.encode("utf-8")) < 32:
             raise AuthConfigurationError("production auth secret must be at least 32 bytes")
@@ -187,6 +195,9 @@ class AuthSessionStore:
         self._ttl_seconds = ttl_seconds
         self._sessions: dict[str, tuple[ActorSummary, float]] = {}
         self._lock = threading.RLock()
+        self._state_repository = state_repository
+        if self._state_repository is None and is_postgresql_url(database_url):
+            self._state_repository = AuthStateRepository(database_url or "")
 
     def _digest(self, token: str) -> str:
         try:
@@ -204,6 +215,15 @@ class AuthSessionStore:
         if not _verify_password(password, account.password_hash):
             return None
         token = secrets.token_urlsafe(32)
+        if self._state_repository is not None:
+            created_at = datetime.now(timezone.utc)
+            self._state_repository.create_session(
+                token_digest=self._digest(token),
+                username=account.username,
+                created_at=created_at,
+                expires_at=created_at + timedelta(seconds=self._ttl_seconds),
+            )
+            return token, account.actor
         with self._lock:
             self._purge_expired(time.monotonic())
             self._sessions[self._digest(token)] = (
@@ -216,6 +236,14 @@ class AuthSessionStore:
         if not token:
             return None
         digest = self._digest(token)
+        if self._state_repository is not None:
+            username = self._state_repository.active_username(
+                digest, now=datetime.now(timezone.utc)
+            )
+            if username is None:
+                return None
+            account = self._accounts.get(username.casefold())
+            return None if account is None else account.actor
         with self._lock:
             record = self._sessions.get(digest)
             if record is None:
@@ -229,6 +257,10 @@ class AuthSessionStore:
     def revoke(self, token: str | None) -> bool:
         if not token:
             return False
+        if self._state_repository is not None:
+            return self._state_repository.revoke_session(
+                self._digest(token), now=datetime.now(timezone.utc)
+            )
         with self._lock:
             return self._sessions.pop(self._digest(token), None) is not None
 
@@ -245,20 +277,38 @@ class RateLimitResult:
 
 
 class AdmissionLimiter:
-    """Atomic fixed-window admission control for one application process."""
+    """Atomic fixed-window admission control with a PostgreSQL state path."""
 
-    def __init__(self, *, limit: int, window_seconds: int) -> None:
+    def __init__(
+        self,
+        *,
+        limit: int,
+        window_seconds: int,
+        database_url: str | None = None,
+        state_repository: AuthStateRepository | None = None,
+    ) -> None:
         if limit <= 0 or window_seconds <= 0:
             raise ValueError("admission limits must be positive")
         self._limit = limit
         self._window_seconds = window_seconds
         self._events: dict[str, deque[float]] = {}
         self._lock = threading.Lock()
+        self._state_repository = state_repository
+        if self._state_repository is None and is_postgresql_url(database_url):
+            self._state_repository = AuthStateRepository(database_url or "")
 
     def check(self, keys: Iterable[str], *, now: float | None = None) -> RateLimitResult:
         normalized = tuple(dict.fromkeys(key for key in keys if key))
         if not normalized:
             return RateLimitResult(True, 0)
+        if self._state_repository is not None:
+            allowed, retry_after = self._state_repository.check_admission(
+                normalized,
+                limit=self._limit,
+                window_seconds=self._window_seconds,
+                now=time.time() if now is None else now,
+            )
+            return RateLimitResult(allowed, retry_after)
         current = time.monotonic() if now is None else now
         with self._lock:
             buckets = []

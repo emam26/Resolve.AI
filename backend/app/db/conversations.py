@@ -33,22 +33,27 @@ from sqlalchemy.pool import StaticPool
 
 
 DEFAULT_DATABASE_URL: Final = "sqlite+pysqlite:///:memory:"
-SUPPORTED_ALEMBIC_HEAD: Final = "20261124_09"
+SUPPORTED_ALEMBIC_HEAD: Final = "20261124_10"
 REQUIRED_POSTGRES_TABLES: Final = frozenset(
     {
         "alembic_version",
         "conversations",
         "conversation_messages",
         "refund_reviews",
+        "resolveai_id_sequences",
         "customer_memories",
+        "policy_documents",
         "policy_versions",
         "policy_sections",
         "policy_embeddings",
+        "policy_index_entries",
         "policy_index_jobs",
-        "policy_audit_events",
+        "policy_audit_log",
         "ai_model_registry",
         "ai_quota_windows",
         "ai_quota_reservations",
+        "auth_sessions",
+        "auth_admission_windows",
     }
 )
 _UNSET = object()
