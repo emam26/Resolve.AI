@@ -1,0 +1,38 @@
+# ResolveAI API deployment template. This file describes a future service; it
+# does not create or modify a Render resource by itself.
+services:
+  - type: web
+    name: resolveai-api
+    runtime: python
+    plan: free
+    autoDeployTrigger: off
+    buildCommand: pip install -r backend/requirements.txt
+    startCommand: uvicorn backend.app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /readyz
+    envVars:
+      - key: RESOLVEAI_ENVIRONMENT
+        value: production
+      - key: RESOLVEAI_DEMO_AUTH_ENABLED
+        value: "false"
+      - key: RESOLVEAI_PRODUCTION_AUTH_ENABLED
+        value: "true"
+      - key: RESOLVEAI_SUPPORTED_ALEMBIC_HEAD
+        value: "20261124_10"
+      - key: RESOLVEAI_EXTERNAL_INFERENCE_ENABLED
+        value: "false"
+      - key: RESOLVEAI_ZERO_COST_MODE
+        value: "true"
+      - key: RESOLVEAI_PROVIDER_REQUEST_QUOTA
+        value: "0"
+      - key: RESOLVEAI_PROVIDER_TOKEN_QUOTA
+        value: "0"
+      - key: RESOLVEAI_DATABASE_URL
+        sync: false
+      - key: RESOLVEAI_COMMERCE_DATABASE_URL
+        sync: false
+      - key: RESOLVEAI_CORS_ORIGINS
+        sync: false
+      - key: RESOLVEAI_AUTH_SECRET_KEY
+        sync: false
+      - key: RESOLVEAI_PRODUCTION_AUTH_USERS_JSON
+        sync: false
