@@ -3,13 +3,21 @@ from __future__ import annotations
 import pytest
 
 from backend.app.ai.local_transformers import LocalTransformersPolicyAnswerProvider
-from backend.app.api.app import _configured_policy_response_provider
+from backend.app.api.app import (
+    _configured_external_policy_response_provider,
+    _configured_policy_response_provider,
+)
+from backend.app.config import ResolveAISettings
 
 
 def test_local_model_provider_is_disabled_without_explicit_configuration(monkeypatch) -> None:
     monkeypatch.delenv("RESOLVEAI_LOCAL_POLICY_MODEL", raising=False)
 
     assert _configured_policy_response_provider() is None
+
+
+def test_external_provider_data_plane_is_disabled_by_default() -> None:
+    assert _configured_external_policy_response_provider(ResolveAISettings(_env_file=None)) is None
 
 
 def test_local_model_provider_is_local_only_and_lazy(monkeypatch) -> None:

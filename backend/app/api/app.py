@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 from fastapi.routing import APIRouter
 from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy.exc import SQLAlchemyError
 
 from backend.app.contracts import (
     AppendMessageRequest,
@@ -29,6 +30,12 @@ from backend.app.ai.answer import PolicyRetriever
 from backend.app.ai.generation import PolicyAnswerProvider
 from backend.app.ai.investigation import InvestigationModel
 from backend.app.ai.local_transformers import LocalTransformersPolicyAnswerProvider
+from backend.app.ai.model_control import AdaptiveModelRouter, ModelRegistry, QuotaLedger
+from backend.app.ai.provider_adapters import (
+    ProviderConfigurationError,
+    RoutedPolicyAnswerProvider,
+    build_provider_adapter,
+)
 from backend.app.diagnostics import (
     new_correlation_id,
     reset_correlation_id,
@@ -126,17 +133,65 @@ def _configured_commerce_repository() -> CommerceRepository | None:
 
 
 def _configured_policy_response_provider() -> PolicyAnswerProvider | None:
-    """Opt into a cached, local-only answer model through explicit config."""
+    """Select an explicitly configured local or qualified external provider."""
 
     settings = get_settings()
     model_name = settings.local_policy_model.strip()
     if not model_name:
-        return None
+        return _configured_external_policy_response_provider(settings)
     return LocalTransformersPolicyAnswerProvider(
         model_name,
         timeout_seconds=settings.local_policy_timeout_seconds,
         max_new_tokens=settings.local_policy_max_new_tokens,
     )
+
+
+def _configured_external_policy_response_provider(
+    settings: ResolveAISettings,
+) -> PolicyAnswerProvider | None:
+    """Build the external data plane only from active, persisted model gates.
+
+    This function is deliberately fail-closed.  It does not discover, qualify,
+    activate, or call a provider; all of those operations must be completed by
+    explicit control-plane workflows before an adapter can be routed.
+    """
+
+    if (
+        not settings.external_inference_enabled
+        or settings.zero_cost_mode
+        or settings.provider_request_quota <= 0
+        or settings.provider_token_quota <= 0
+    ):
+        return None
+    database_url = settings.database_url
+    if not database_url or not database_url.startswith(("postgresql", "postgres")):
+        return None
+    try:
+        registry = ModelRegistry(database_url, initialize_schema=False)
+        quota = QuotaLedger(database_url)
+        adapters = {}
+        for model in registry.list():
+            try:
+                adapters[model.model_key] = build_provider_adapter(
+                    model.provider,
+                    model.model_id,
+                    settings,
+                    modelscope_base_url=settings.modelscope_base_url,
+                )
+            except ProviderConfigurationError:
+                continue
+        if not adapters:
+            return None
+        return RoutedPolicyAnswerProvider(
+            AdaptiveModelRouter(registry, quota),
+            adapters,
+            estimated_tokens=min(settings.local_policy_max_new_tokens, 256),
+            deadline_ms=settings.provider_timeout_seconds * 1000,
+        )
+    except (SQLAlchemyError, OSError, ValueError):
+        # Startup and local deterministic operation must not depend on a live
+        # provider or an unavailable optional registry database.
+        return None
 
 
 def _policy_response(record) -> PolicySectionResponse:

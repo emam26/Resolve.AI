@@ -108,6 +108,9 @@ class ResolveAISettings(BaseSettings):
         default="",
         validation_alias=AliasChoices("RESOLVEAI_MODELSCOPE_MODEL", "MODELSCOPE_MODEL"),
     )
+    modelscope_base_url: str | None = Field(
+        default=None, validation_alias="RESOLVEAI_MODELSCOPE_BASE_URL"
+    )
     agnes_model: str = Field(
         default="",
         validation_alias=AliasChoices("RESOLVEAI_AGNES_MODEL", "AGNES_MODEL"),
@@ -217,6 +220,7 @@ class ResolveAISettings(BaseSettings):
         "cloudflare_api_token",
         "openrouter_api_key",
         "modelscope_api_key",
+        "modelscope_base_url",
         "agnes_api_key",
         "chutes_api_key",
         "database_url",
