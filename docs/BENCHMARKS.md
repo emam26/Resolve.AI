@@ -162,3 +162,25 @@ behavior.
 
 ## Reference UI integration candidate
 No new backend, PostgreSQL, browser, provider or load benchmark pass is claimed. TypeScript typecheck and Python compileall passed. Native build, backend test collection and browser fixture navigation were blocked by environment limitations; see UI_INTEGRATION_HANDOFF.md. All earlier measurements remain historical.
+
+## M23 public-product and deployment-readiness checkpoint
+
+These results are local and synthetic. No hosted service, paid provider,
+payment operation, cloud mutation, or protected holdout was used.
+
+| Evidence | Result | Limits |
+| --- | --- | --- |
+| AI/provider-scope regression | `113 passed` | No live provider requests; deterministic customer path remains the default |
+| Full backend regression | `344 passed, 42 skipped` | Skips are existing opt-in PostgreSQL/commerce cases without the test selector; the real PostgreSQL subset is reported below |
+| PostgreSQL/pgvector suites | `108 passed` | Existing loopback `pgvector/pgvector:pg16`, isolated synthetic database, Alembic head `20261124_10`; unrelated containers were untouched |
+| Frontend static checks | Typecheck and production build passed | Local Node dependencies and public build only |
+| Playwright local suite | `18 passed, 3 skipped` | One serialized system-Chrome worker; synthetic fixtures; production-mode cases are also reported separately |
+| Playwright production-auth/mobile focus | `3 passed` | Mocked synthetic API and local production-mode server; hosted cross-origin cookies remain unverified |
+| Artifact and dependency checks | `compileall`, `pip check`, `git diff --check` passed; no tracked private env paths; `0` credential-pattern matches in `frontend/dist` | Pattern scan is a safeguard, not proof that arbitrary future secrets cannot be introduced |
+| Local service status | Backend/frontend and PostgreSQL running; `/healthz` and `/readyz` HTTP `200` | Existing unmanaged app processes were observed and left running; no deployment claim |
+
+The independent read-only M23 review returned a conditional pass. It found and
+the lead fixed the Render health path, missing production commerce-source
+requirement, production actor-ID presentation, and architecture-session
+documentation issues. The fixes were lead-verified; no second independent
+post-fix review is claimed.

@@ -10,6 +10,25 @@ ResolveAI is an intelligent customer-operations application for a fictional onli
 
 The repository is deliberately synthetic-data-first. It demonstrates the boundaries and safety rules needed for customer operations without connecting to a real merchant, payment provider, customer dataset, or paid model API.
 
+## Release status
+
+| Area | Status |
+| --- | --- |
+| Public product presentation | Locally ready for owner review |
+| Backend and frontend release configuration | Prepared, not deployed |
+| Local PostgreSQL/pgvector verification | Passed against synthetic data |
+| Hosted authentication and browser behavior | Not verified |
+| Hosted generative model qualification | Not qualified; deterministic assistance remains the default |
+
+### Product preview
+
+These screenshots show locally verified synthetic product surfaces. They are
+representative UI evidence, not proof of a hosted deployment.
+
+| Workspace | Customer support | Knowledge management |
+| --- | --- | --- |
+| ![Workspace overview](docs/uat/screenshots/workspace-overview.png) | ![Customer widget](docs/uat/screenshots/customer-widget.png) | ![Knowledge management](docs/uat/screenshots/knowledge-management.png) |
+
 ## Why ResolveAI
 
 Customer requests often cross several systems and levels of responsibility: a shopper needs an order update, a policy must be applied, a support agent may need to take over, and a refund may require separate approval. A useful system must keep those steps connected while preserving ownership, evidence, and human control.
@@ -26,15 +45,15 @@ ResolveAI addresses that workflow with:
 
 | Capability | Current implementation | Verification status |
 | --- | --- | --- |
-| Customer widget | React/TypeScript/Vite UI with demo customer login, order selection, transcript, and human-handoff control | Local API and frontend checks pass |
+| Customer widget | React/TypeScript/Vite UI with local synthetic login or provisioned production login, order selection, transcript, and human-handoff control | Local API and frontend checks pass; hosted browser behavior is unverified |
 | Staff console | Support inbox, claim/reply/resolve controls, support-side refund-review request form, and refund-approver view | Local API and frontend checks pass |
 | Operations workspace | Authorized overview metrics, recent activity, read-only policy catalog, and merchant-admin team/settings view | PostgreSQL-backed API tests and browser checks pass locally |
 | Embeddable widget mode | Customer-only `?surface=widget` route reusing the server-established demo session boundary | Eight local Playwright checks pass with an explicit system Chrome executable |
-| Identity and authorization | Server-issued synthetic sessions, role checks, and customer order ownership checks | Covered by backend tests |
+| Identity and authorization | Server-issued synthetic sessions for local demo mode plus PostgreSQL-backed provisioned sessions, role checks, CSRF protection, and customer order ownership checks | Covered by backend and local PostgreSQL tests |
 | Conversations | SQLAlchemy-backed conversation and message persistence; SQLite is the default local database | SQLite and disposable PostgreSQL runtime exercised locally; no production database |
 | Policy answering | Deterministic lexical retrieval over a small versioned policy corpus with published/visibility filtering and citations | Offline baseline verified |
 | Semantic retrieval | Sentence-transformers adapter, deterministic cosine retriever, pgvector retriever, publication-safe query, migration, and seed helper | Real 384-dimensional local embeddings seeded into pgvector; customer API and browser path verified locally |
-| Investigation workflow | Bounded LangGraph workflow with typed order-facts and injected policy retrieval | Deterministic local workflow and customer API path verified; no live model SDK |
+| Investigation workflow | Bounded LangGraph workflow with typed order facts, injected policy retrieval, evidence validation, and deterministic fallback | Deterministic local workflow and customer API path verified; no hosted model is qualified |
 | Optional local answer model | Local-only Transformers adapter behind the existing validated `PolicyAnswerProvider` boundary | Disabled by default; adapter contract tested, but no cached generative model smoke test yet |
 | Refund review | Backend API and staff console support pending requests, stable idempotency, separate approver decisions, and an external-action-required terminal state | Local synthetic flow verified; no payment operation |
 
@@ -42,7 +61,7 @@ ResolveAI addresses that workflow with:
 
 The main supported path is:
 
-1. A synthetic customer requests the allowlisted `customer_001` demo actor. The server issues a demo session only for known synthetic identities and enforces role and ownership; this is not production authentication.
+1. In local demo mode, a synthetic customer requests the allowlisted `customer_001` actor. In production mode, a provisioned account signs in through the server-issued HttpOnly session path. Both paths enforce server-side role and ownership; the demo path is never enabled for production.
 2. The customer opens a widget conversation, optionally associated with seeded order `order_1001`, and sends a message. The API runs the bounded investigation workflow: authorized order questions use typed order facts, while policy questions use the configured semantic retriever or the deterministic lexical fallback.
 3. A grounded response includes only published, audience-visible policy evidence. Irrelevant, unsupported, refund, and unavailable-tool cases return a safe handoff result without an invented answer. The customer can then request human support, moving the conversation from `AI_ACTIVE` to `HANDOFF_QUEUED`.
 4. A synthetic support agent signs in as `support_001`, claims the queued case, and replies as a human. The state becomes `HUMAN_ACTIVE`, which blocks autonomous replies.
@@ -50,7 +69,7 @@ The main supported path is:
 6. A separate `refund_approver_001` actor can approve or reject the request. Approval produces `APPROVED_EXTERNAL_ACTION_REQUIRED`; it never moves money and never records `REFUNDED`.
 7. After the human work is complete, the support agent can resolve the conversation, moving it from `HUMAN_ACTIVE` to `RESOLVED`.
 
-The local widget route uses a deterministic classifier and mocked model boundary; it does not call a live LLM. Semantic retrieval is opt-in for a PostgreSQL database through `RESOLVEAI_POLICY_RETRIEVAL=semantic`. The sentence-transformers model is loaded from the local cache only. If that backend or local model is unavailable, the policy answer layer falls back to the lexical baseline and never presents that fallback as a semantic success.
+The local widget route uses a deterministic classifier and controlled model boundary; it does not call a hosted LLM. Semantic retrieval is opt-in for a PostgreSQL database through `RESOLVEAI_POLICY_RETRIEVAL=semantic`. The sentence-transformers model is loaded from the local cache only. If that backend or local model is unavailable, the policy answer layer falls back to the lexical baseline and never presents that fallback as a semantic success.
 
 ## System architecture
 
@@ -60,8 +79,8 @@ flowchart LR
     Staff[Support agent] --> Console[React staff console]
     Approver[Refund approver] --> Console
 
-    Widget -->|JSON + demo Bearer session| API[FastAPI API]
-    Console -->|JSON + demo Bearer session| API
+    Widget -->|JSON + demo Bearer or production cookie/CSRF session| API[FastAPI API]
+    Console -->|JSON + demo Bearer or production cookie/CSRF session| API
 
     API --> Auth[Server identity, role, and ownership checks]
     API --> Conversations[Conversation and state service]
@@ -97,7 +116,11 @@ flowchart LR
 | Workflow | LangGraph with injected model and typed business-facts boundaries |
 | Quality | pytest, HTTPX/FastAPI tests, TypeScript typecheck, Vite production build, GitHub Actions |
 
-There is no live LLM SDK integration, production authentication, commerce connector, or payment-write integration in this version.
+Provider adapters and routing controls exist behind explicit qualification, quota,
+privacy, and zero-cost gates. No hosted model is currently qualified or active.
+Production authentication is implemented, but hosted cross-origin cookie behavior
+and a real merchant integration have not been verified. There is no payment-write
+integration.
 
 ## Local setup
 
@@ -139,7 +162,9 @@ The application has no required secrets or live-provider credentials. These opti
 | `RESOLVEAI_LOCAL_POLICY_MODEL` | unset | Optional local path or cached Transformers model for policy-answer formulation; unset preserves deterministic generation |
 | `RESOLVEAI_LOCAL_POLICY_TIMEOUT_SECONDS` | `8` | Maximum time for one local model response before deterministic fallback; the provider remains closed after a timeout |
 | `RESOLVEAI_DEMO_SESSION_TTL_SECONDS` | `3600` | Lifetime of a local synthetic demo session; production authentication is not provided by this demo route |
-| `RESOLVEAI_COMMERCE_DATABASE_URL` | unset | Explicit PostgreSQL URL for the optional M11A read-only imported-commerce repository; unset retains in-memory order fixtures |
+| `RESOLVEAI_ENVIRONMENT` | `local` | Use `production` only with PostgreSQL, provisioned accounts, explicit trusted origins, and demo auth disabled |
+| `VITE_AUTH_MODE` | unset (`demo`) | Set to `production` to use provisioned login and credentialed cookie requests; never put secrets in Vite variables |
+| `RESOLVEAI_COMMERCE_DATABASE_URL` | unset locally | PostgreSQL URL for the read-only imported-commerce repository; optional for local demo fixtures but required in production |
 | `VITE_API_BASE_URL` | empty, same-origin requests | API base URL used by the Vite frontend |
 
 For a local two-process run, a file-backed SQLite database is convenient:
@@ -192,7 +217,16 @@ $env:VITE_API_BASE_URL = "http://127.0.0.1:8000"
 npm run dev -- --host 127.0.0.1 --port 5173
 ```
 
-Open <http://127.0.0.1:5173>. The UI labels its demo identities and synthetic data clearly. The API is available at <http://127.0.0.1:8000>.
+Open <http://127.0.0.1:5173>. Local demo mode labels synthetic identities and records clearly. The API is available at <http://127.0.0.1:8000>.
+
+For the repository-managed local lifecycle, use the existing scripts from the
+root. They only target the named local PostgreSQL container and leave unmanaged
+processes and unrelated containers untouched:
+
+```powershell
+.\scripts\start-local.ps1
+.\scripts\status-local.ps1
+```
 
 To verify the API session endpoint directly from PowerShell:
 
@@ -233,6 +267,42 @@ locust -f scripts\locustfile.py --host http://127.0.0.1:8000 --headless
 ```
 
 The profiles stop automatically after their configured duration. For a short smoke run, set `RESOLVEAI_LOCUST_MAX_SECONDS=5` before starting Locust. The workflow users create bounded synthetic conversations and refund-review records during a run, so longer profiles intentionally measure behavior while local state grows; reset the disposable database between comparable runs. These are local performance probes, not production capacity claims; capture the Locust summary with the profile name, API configuration, and machine details when comparing runs.
+
+## Deployment preparation
+
+The intended future topology is a Cloudflare Pages static frontend, a Render
+FastAPI web service, and Neon PostgreSQL with pgvector. The checked-in
+[`render.yaml`](render.yaml) is a reviewable service template; it does not
+create a service or deploy anything. Configure only `VITE_API_BASE_URL` and
+`VITE_AUTH_MODE=production` in the Pages build environment. Keep all database,
+session, account, and provider secrets in the backend service environment.
+
+Before a hosted rollout:
+
+1. Create the Neon database and confirm the `vector` extension is available.
+2. Configure Render secrets and trusted Cloudflare origin values from
+   [`.env.example`](.env.example); never copy private values into this repo.
+3. Run `python -m alembic -c backend/alembic.ini upgrade head` from a trusted
+   release environment against the intended Neon URL, then verify
+   `20261124_10` with `alembic current`.
+4. Verify `/healthz` for process liveness and `/readyz` for dependency
+   readiness before admitting traffic. Readiness must remain fail-closed when
+   the database, commerce source, or schema is unavailable.
+5. Deploy the frontend only after the API origin, credentialed CORS, cookie,
+   CSRF, login, reload, expiry, logout, and role-isolation checks pass in the
+   actual hosted domains.
+6. Take a database backup and record the previous application commit before a
+   rollout. Roll back the application to that commit if smoke checks fail; use
+   a separately reviewed Alembic downgrade only when the migration policy
+   explicitly permits it.
+
+The free Render plan is suitable for a preview, not a durable production
+merchant service: free web services sleep after inactivity and have ephemeral
+files, while free Postgres has a 30-day lifetime and no backups. Render's
+pre-deploy migration command is not available on the free web plan, so a
+trusted migration step must be completed separately or a paid deployment plan
+must be selected. See the current platform notes in
+[`docs/DEPLOYMENT_PREPARATION.md`](docs/DEPLOYMENT_PREPARATION.md).
 
 ### PostgreSQL policy index (optional)
 
@@ -300,11 +370,11 @@ No Shopify or other production commerce integration, real customer data, payment
 
 ## Limitations
 
-- The customer API uses a deterministic local classifier and mocked model boundary; it is not a live provider integration.
+- The customer API uses deterministic assistance by default. Provider adapters are present, but no hosted model is qualified or enabled for customer traffic.
 - The semantic and pgvector paths are verified locally with real sentence-transformers embeddings and deterministic CI coverage. On the M8 15-case comparison, semantic retrieval reached 0.60 Recall@3 versus 0.80 for lexical; these are small synthetic-corpus results, not production benchmarks.
 - PostgreSQL full-text search is implemented for offline comparison only. It reached 0.30 Recall@3 and is not part of the customer runtime.
 - SQLite remains the default local persistence path. PostgreSQL, Docker/WSL, and browser automation were verified only against disposable synthetic data, not production infrastructure.
-- Demo authentication, seeded identities, and the single fictional merchant are not suitable for production use.
+- Local demo authentication, seeded identities, and the single fictional merchant are not suitable for a real merchant pilot. Provisioned production authentication is locally verified, while hosted cookie behavior remains unverified.
 - The staff knowledge surface includes the local policy draft/edit, validation,
   publication, rollback, indexing, and audit workflow. It remains synthetic
   and deployment-bound: persistent PostgreSQL/index readiness and production

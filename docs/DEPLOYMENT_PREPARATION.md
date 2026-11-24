@@ -6,6 +6,11 @@ Neon + Render + Cloudflare Pages architecture. No cloud resource, billing
 change, database migration, or hosted deployment has been performed or verified
 by this repository.
 
+The checked-in [`render.yaml`](../render.yaml) is a non-deploying Render
+Blueprint template. It intentionally uses `autoDeployTrigger: off`, leaves
+secrets as dashboard-managed values, and does not run migrations automatically.
+Review it before using it with an owner-approved service.
+
 ## Target topology
 
 | Component | Future target | Current evidence |
@@ -72,6 +77,7 @@ For a future hosted API, review at least:
 ```text
 RESOLVEAI_ENVIRONMENT=production
 RESOLVEAI_DATABASE_URL=<Neon PostgreSQL URL with pgvector>
+RESOLVEAI_COMMERCE_DATABASE_URL=<approved Neon commerce schema URL>
 RESOLVEAI_CORS_ORIGINS=https://<Cloudflare Pages hostname>
 RESOLVEAI_DEMO_AUTH_ENABLED=false
 RESOLVEAI_AUTH_SECRET_KEY=<private rotated secret>
@@ -85,6 +91,51 @@ RESOLVEAI_ZERO_COST_MODE=true
 RESOLVEAI_PROVIDER_REQUEST_QUOTA=0
 RESOLVEAI_PROVIDER_TOKEN_QUOTA=0
 ```
+
+The Render service should use the repository's Python build and start commands:
+
+```text
+Build:  pip install -r backend/requirements.txt
+Start:  uvicorn backend.app.main:app --host 0.0.0.0 --port $PORT
+Health: /readyz (Render dependency health check)
+Liveness: /healthz
+```
+
+Production startup requires `RESOLVEAI_COMMERCE_DATABASE_URL`; without it the
+application refuses to start rather than serving local synthetic order
+fixtures. It may point to the same approved Neon database when the imported
+`commerce_*` tables are present.
+
+On Render's free web plan, the service can sleep after 15 minutes without
+inbound traffic and its local filesystem is ephemeral. Free Render Postgres is
+limited to 1 GB, has no backups, and expires after 30 days. Render documents
+that `preDeployCommand` is available only for paid web services, so free-plan
+migrations must be run separately from a trusted release environment before
+traffic is admitted. These are platform limitations, not local ResolveAI test
+results.
+
+For the static frontend, Cloudflare Pages' documented Vite defaults are
+`npm run build` and `dist`. Configure `VITE_API_BASE_URL` and
+`VITE_AUTH_MODE=production` as Pages build variables only. The generated build
+contains public configuration only; provider credentials and database/session
+secrets belong exclusively to the Render backend.
+
+Neon is the planned PostgreSQL provider. Confirm pgvector availability, use its
+TLS connection string, and choose a pooled connection option appropriate for
+the deployed web service. Run the migration from a controlled release
+environment, then verify the exact head and `/readyz`; never use the service's
+startup path to silently mutate an unknown database.
+
+Authoritative platform references checked for this preparation:
+
+- [Cloudflare Pages Vite build configuration](https://developers.cloudflare.com/pages/configuration/build-configuration/)
+- [Render FastAPI deployment](https://render.com/docs/deploy-fastapi)
+- [Render environment variables and secrets](https://render.com/docs/configure-environment-variables)
+- [Render health checks](https://render.com/docs/health-checks)
+- [Render free-instance limitations](https://render.com/docs/free)
+- [Render Blueprint reference](https://render.com/docs/blueprint-spec)
+- [Neon pgvector extension](https://neon.com/docs/extensions/pgvector)
+- [Neon application connections](https://neon.com/docs/connect/connect-from-any-app)
 
 Local M21 verification adds a provisioned-account path at
 `POST /api/v1/auth/login`. Accounts are configured only in the backend through
