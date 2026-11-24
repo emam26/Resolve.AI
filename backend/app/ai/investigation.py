@@ -8,7 +8,7 @@ database, or arbitrary tool execution.
 from __future__ import annotations
 
 from time import perf_counter
-from typing import Literal, Mapping, Protocol, TypedDict
+from typing import Literal, Mapping, Protocol, Sequence, TypedDict
 
 from langgraph.graph import END, START, StateGraph
 from pydantic import BaseModel, ConfigDict
@@ -19,7 +19,7 @@ from backend.app.contracts import (
     OrderStatus,
     ShipmentStatus,
 )
-from backend.app.ai.generation import PolicyAnswerProvider
+from backend.app.ai.generation import PolicyAnswerProvider, UntrustedCustomerMemory
 from backend.app.diagnostics import log_event
 from backend.app.rag.models import PolicyAudience, PolicyEvidence
 from backend.app.ai.answer import PolicyRetriever, answer_from_published_policy
@@ -126,6 +126,7 @@ class _InvestigationState(TypedDict, total=False):
     facts_tool: OrderFactsTool
     policy_retriever: PolicyRetriever | None
     response_provider: PolicyAnswerProvider | None
+    memory: Sequence[UntrustedCustomerMemory]
     intent: InvestigationIntent
     facts: OrderFacts | None
     result: InvestigationResult
@@ -269,7 +270,7 @@ def _answer_structured(state: _InvestigationState) -> dict[str, object]:
 
 def _answer_database_policy(state: _InvestigationState) -> dict[str, object]:
     facts = state.get("facts")
-    grounded = answer_from_published_policy(state["query"], audience=state["audience"], policy_retriever=state.get("policy_retriever"), response_provider=state.get("response_provider"))
+    grounded = answer_from_published_policy(state["query"], audience=state["audience"], policy_retriever=state.get("policy_retriever"), response_provider=state.get("response_provider"), memory=state.get("memory", ()))
     if facts is None:
         reason = "order_facts_unavailable"
     elif not grounded.grounded or grounded.answer is None:
@@ -287,6 +288,7 @@ def _answer_policy(state: _InvestigationState) -> dict[str, object]:
         audience=state["audience"],
         policy_retriever=state.get("policy_retriever"),
         response_provider=state.get("response_provider"),
+        memory=state.get("memory", ()),
     )
     if not grounded.grounded or grounded.answer is None:
         result = _handoff_result(state, "insufficient_published_policy", "answer_policy")
@@ -372,6 +374,7 @@ def run_investigation(
     order_id: str | None = None,
     policy_retriever: PolicyRetriever | None = None,
     response_provider: PolicyAnswerProvider | None = None,
+    memory: Sequence[UntrustedCustomerMemory] = (),
 ) -> InvestigationResult:
     """Run the finite investigation graph and fail closed on tool/model errors."""
 
@@ -420,6 +423,7 @@ def run_investigation(
         "facts_tool": facts_tool,
         "policy_retriever": policy_retriever,
         "response_provider": response_provider,
+        "memory": tuple(memory),
         "trace": [],
     }
     try:

@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import re
-from typing import Protocol, Sequence
+from math import ceil
+from typing import Literal, Protocol, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -92,6 +93,39 @@ class GeneratedPolicyAnswer(BaseModel):
         return value.strip()
 
 
+class PromptContextMetadata(BaseModel):
+    """Non-content measurements for one bounded provider context.
+
+    These fields let the caller measure truncation and input sizing without
+    copying customer or policy text into diagnostics or logs.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    budget_chars: int = Field(default=6000, gt=0)
+    original_query_chars: int = Field(default=0, ge=0)
+    query_chars: int = Field(default=0, ge=0)
+    original_evidence_chars: int = Field(default=0, ge=0)
+    evidence_chars: int = Field(default=0, ge=0)
+    evidence_count: int = Field(default=0, ge=0, le=3)
+    original_memory_chars: int = Field(default=0, ge=0)
+    memory_chars: int = Field(default=0, ge=0)
+    memory_count: int = Field(default=0, ge=0, le=5)
+    truncated: bool = False
+    estimated_input_tokens: int = Field(default=1, gt=0)
+
+
+class UntrustedCustomerMemory(BaseModel):
+    """Customer-owned continuity text; never an authorization or policy fact."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    content: str = Field(min_length=1, max_length=512)
+    provenance: Literal[
+        "customer_reported", "conversation_summary", "staff_verified"
+    ]
+
+
 class PolicyAnswerPrompt(BaseModel):
     """Explicit untrusted-input boundary for an optional provider."""
 
@@ -100,6 +134,8 @@ class PolicyAnswerPrompt(BaseModel):
     system_instruction: str = POLICY_PROVIDER_INSTRUCTION
     query: str = Field(min_length=1, max_length=2000)
     evidence: list[AuthorizedPolicyEvidence] = Field(max_length=3)
+    memory: list[UntrustedCustomerMemory] = Field(default_factory=list, max_length=5)
+    context_metadata: PromptContextMetadata = Field(default_factory=PromptContextMetadata)
 
 
 class InvalidGeneratedAnswer(ValueError):
@@ -111,6 +147,139 @@ class PolicyAnswerProvider(Protocol):
 
     def generate(self, prompt: PolicyAnswerPrompt) -> object:
         """Return a candidate response for validation by the server."""
+
+
+def _clip_untrusted_text(value: str, limit: int) -> str:
+    """Clip text deterministically while retaining both ends of a condition."""
+
+    if limit <= 0:
+        raise ValueError("context text limits must be positive")
+    if len(value) <= limit:
+        return value
+    if limit <= 3:
+        return value[:limit]
+    marker = "…"
+    head = (limit - len(marker)) // 2
+    tail = limit - len(marker) - head
+    return f"{value[:head]}{marker}{value[-tail:]}"
+
+
+def build_policy_answer_prompt(
+    query: str,
+    evidence: Sequence[AuthorizedPolicyEvidence],
+    *,
+    memory: Sequence[UntrustedCustomerMemory] = (),
+    context_budget_chars: int = 6000,
+    query_budget_chars: int = 1200,
+) -> PolicyAnswerPrompt:
+    """Build a bounded prompt without changing citation identity or authority.
+
+    The source evidence has already passed server-side audience/publication
+    filtering.  This function only bounds untrusted text sent to a provider;
+    it never creates, reorders, or authorizes evidence.  Full evidence remains
+    available to the answer validator outside this provider context.
+    """
+
+    if not query.strip():
+        raise ValueError("query must contain non-whitespace text")
+    if len(evidence) > 3:
+        raise ValueError("at most three evidence items are supported")
+    if len(memory) > 5:
+        raise ValueError("at most five memory items are supported")
+    if context_budget_chars < 64:
+        raise ValueError("context budget is too small")
+    if query_budget_chars <= 0:
+        raise ValueError("query budget must be positive")
+
+    original_query_chars = len(query)
+    original_evidence_chars = sum(
+        len(item.evidence.text) + len(item.answer_text or "") for item in evidence
+    )
+    original_memory_chars = sum(len(item.content) for item in memory)
+    bounded_query = _clip_untrusted_text(
+        query,
+        min(2000, query_budget_chars, context_budget_chars),
+    )
+    remaining = max(1, context_budget_chars - len(bounded_query))
+    memory_reserve = min(1024, max(0, remaining // 5)) if memory else 0
+    evidence_budget = max(1, remaining - memory_reserve)
+    per_item_budget = max(1, evidence_budget // max(len(evidence), 1))
+    bounded_evidence: list[AuthorizedPolicyEvidence] = []
+    for item in evidence:
+        text_budget = max(1, (per_item_budget * 2) // 3)
+        answer_budget = max(1, per_item_budget - text_budget)
+        bounded_policy = item.evidence.model_copy(
+            update={"text": _clip_untrusted_text(item.evidence.text, text_budget)}
+        )
+        bounded_evidence.append(
+            item.model_copy(
+                update={
+                    "evidence": bounded_policy,
+                    "answer_text": (
+                        _clip_untrusted_text(item.answer_text, answer_budget)
+                        if item.answer_text
+                        else None
+                    ),
+                }
+            )
+        )
+
+    bounded_evidence_chars = sum(
+        len(item.evidence.text) + len(item.answer_text or "")
+        for item in bounded_evidence
+    )
+    bounded_memory: list[UntrustedCustomerMemory] = []
+    if memory and memory_reserve:
+        per_memory_budget = max(1, memory_reserve // len(memory))
+        bounded_memory = [
+            item.model_copy(
+                update={"content": _clip_untrusted_text(item.content, per_memory_budget)}
+            )
+            for item in memory
+        ]
+    bounded_memory_chars = sum(len(item.content) for item in bounded_memory)
+    # This is an intentionally conservative, provider-independent upper bound;
+    # it is metadata only and contains no text or secret material.
+    estimated_input_tokens = max(
+        1,
+        ceil(
+            (
+                len(bounded_query.encode("utf-8"))
+                + sum(
+                    len(item.evidence.text.encode("utf-8"))
+                    + len((item.answer_text or "").encode("utf-8"))
+                    for item in bounded_evidence
+                )
+                + sum(len(item.content.encode("utf-8")) for item in bounded_memory)
+                + 128 * len(bounded_evidence)
+                + 32 * len(bounded_memory)
+            )
+            / 4
+        ),
+    )
+    metadata = PromptContextMetadata(
+        budget_chars=context_budget_chars,
+        original_query_chars=original_query_chars,
+        query_chars=len(bounded_query),
+        original_evidence_chars=original_evidence_chars,
+        evidence_chars=bounded_evidence_chars,
+        evidence_count=len(bounded_evidence),
+        original_memory_chars=original_memory_chars,
+        memory_chars=bounded_memory_chars,
+        memory_count=len(bounded_memory),
+        truncated=(
+            len(bounded_query) < original_query_chars
+            or bounded_evidence_chars < original_evidence_chars
+            or bounded_memory_chars < original_memory_chars
+        ),
+        estimated_input_tokens=estimated_input_tokens,
+    )
+    return PolicyAnswerPrompt(
+        query=bounded_query,
+        evidence=bounded_evidence,
+        memory=bounded_memory,
+        context_metadata=metadata,
+    )
 
 
 def authorized_evidence(
@@ -199,6 +368,9 @@ __all__ = [
     "InvalidGeneratedAnswer",
     "PolicyAnswerPrompt",
     "PolicyAnswerProvider",
+    "PromptContextMetadata",
+    "UntrustedCustomerMemory",
     "authorized_evidence",
+    "build_policy_answer_prompt",
     "validate_generated_answer",
 ]

@@ -7,6 +7,9 @@ from .generation import (
     InvalidGeneratedAnswer,
     PolicyAnswerPrompt,
     PolicyAnswerProvider,
+    PromptContextMetadata,
+    UntrustedCustomerMemory,
+    build_policy_answer_prompt,
 )
 from .local_transformers import LocalTransformersPolicyAnswerProvider
 from .provider_adapters import (
@@ -27,6 +30,9 @@ __all__ = [
     "InvalidGeneratedAnswer",
     "PolicyAnswerPrompt",
     "PolicyAnswerProvider",
+    "PromptContextMetadata",
+    "UntrustedCustomerMemory",
+    "build_policy_answer_prompt",
     "PolicyRetriever",
     "LocalTransformersPolicyAnswerProvider",
     "CloudflareWorkersAIPolicyAnswerProvider",

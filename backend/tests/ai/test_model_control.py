@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 
 import httpx
 import pytest
@@ -530,6 +531,48 @@ def test_unknown_success_usage_never_settles_below_reserved_capacity() -> None:
     assert decision is not None
     router.report_success(decision, actual_tokens=8, usage_known=False, latency_ms=1)
     assert ledger.snapshot(descriptor.quota_scope).tokens_used == 256
+
+
+def test_router_skips_models_without_context_capacity_and_uses_eligible_fallback() -> None:
+    registry = ModelRegistry()
+    narrow = replace(_descriptor("narrow-context", quality=0.99), input_token_limit=32)
+    fallback = replace(_descriptor("wide-context", quality=0.80), input_token_limit=4096)
+    for descriptor in (narrow, fallback):
+        registry.upsert_discovered([descriptor])
+        registry.admit(descriptor.model_key, descriptor, _evidence())
+        registry.activate(descriptor.model_key)
+
+    ledger = QuotaLedger()
+    _configure_routing_scopes(ledger, (narrow, fallback))
+    router = AdaptiveModelRouter(registry, ledger)
+
+    decision = router.select(
+        RouteRequest(estimated_tokens=80, estimated_input_tokens=64)
+    )
+
+    assert decision is not None
+    assert decision.model_id == "wide-context"
+
+
+def test_router_skips_models_without_output_capacity_and_uses_eligible_fallback() -> None:
+    registry = ModelRegistry()
+    narrow = replace(_descriptor("narrow-output", quality=0.99), output_token_limit=64)
+    fallback = replace(_descriptor("wide-output", quality=0.80), output_token_limit=512)
+    for descriptor in (narrow, fallback):
+        registry.upsert_discovered([descriptor])
+        registry.admit(descriptor.model_key, descriptor, _evidence())
+        registry.activate(descriptor.model_key)
+
+    ledger = QuotaLedger()
+    _configure_routing_scopes(ledger, (narrow, fallback))
+    router = AdaptiveModelRouter(registry, ledger)
+
+    decision = router.select(
+        RouteRequest(estimated_tokens=320, estimated_output_tokens=256)
+    )
+
+    assert decision is not None
+    assert decision.model_id == "wide-output"
 
 
 def test_actual_token_overrun_is_recorded_and_stops_further_dispatch() -> None:

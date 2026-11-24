@@ -8,7 +8,7 @@ from backend.app.ai.generation import (
     InvalidGeneratedAnswer,
     validate_generated_answer,
 )
-from backend.app.rag.models import PolicyEvidence
+from backend.app.rag.models import PolicyEvidence, PolicyRecord
 
 
 DELIVERY_EVIDENCE = PolicyEvidence(
@@ -79,6 +79,54 @@ def test_optional_provider_formulates_only_from_authorized_evidence() -> None:
     assert len(provider.calls) == 1
     assert provider.calls[0].evidence[0].citation_id == "evidence-1"
     assert provider.calls[0].evidence[0].evidence.visibility == "public"
+
+
+def test_bounded_provider_context_preserves_full_server_side_citation_validation() -> None:
+    evidence = PolicyEvidence(
+        document_id="long-delivery-policy",
+        document_version="v2",
+        section="Delayed shipments",
+        release_id="release-2026-11-01",
+        visibility="public",
+        score=0.91,
+        text=(
+            "If a shipment is delayed, contact support for an updated estimate. "
+            + ("Long policy context. " * 250)
+        ),
+    )
+    answer_text = "If a shipment is delayed, contact support for an updated estimate."
+
+    class LongPolicyRetriever:
+        def retrieve_published_policy(self, query: str, audience: str = "customer", top_k: int = 3):
+            del query, audience, top_k
+            return [evidence]
+
+    provider = FakeAnswerProvider(
+        {"answer": answer_text, "citation_ids": ["evidence-1"]}
+    )
+    response = answer_from_published_policy(
+        "shipment delayed",
+        corpus=[
+            PolicyRecord(
+                document_id=evidence.document_id,
+                document_version=evidence.document_version,
+                section=evidence.section,
+                release_id=evidence.release_id,
+                status="published",
+                visibility="public",
+                text=evidence.text,
+                answer_text=answer_text,
+            )
+        ],
+        policy_retriever=LongPolicyRetriever(),
+        response_provider=provider,
+    )
+
+    assert response.grounded is True
+    assert response.generation_mode == "model"
+    assert provider.calls[0].context_metadata.truncated is True
+    assert provider.calls[0].evidence[0].citation_id == "evidence-1"
+    assert response.citation_ids == ["evidence-1"]
 
 
 @pytest.mark.parametrize(

@@ -555,6 +555,8 @@ class RegisteredModel:
     free_eligible: bool | None
     privacy_eligible: bool
     structured_output_supported: bool | None
+    input_token_limit: int | None
+    output_token_limit: int | None
     pricing: tuple[tuple[str, float], ...]
     rate_limits: tuple[tuple[str, float], ...]
     approved_task_categories: frozenset[str]
@@ -799,6 +801,8 @@ def _registered_model(row: ModelRegistryRow) -> RegisteredModel:
         free_eligible=row.free_eligible,
         privacy_eligible=row.privacy_eligible,
         structured_output_supported=row.structured_output_supported,
+        input_token_limit=row.input_token_limit,
+        output_token_limit=row.output_token_limit,
         pricing=tuple(
             (str(key), float(value))
             for key, value in _runtime_metrics(row.pricing_json).items()
@@ -1264,6 +1268,8 @@ class RouteRequest:
     task_category: str = "policy_answer"
     required_capabilities: frozenset[str] = frozenset({"structured_outputs"})
     estimated_tokens: int = 256
+    estimated_input_tokens: int | None = None
+    estimated_output_tokens: int | None = None
     deadline_ms: float | None = None
     manual_model_id: str | None = None
     execution_mode: Literal["customer", "evaluation"] = "customer"
@@ -1320,6 +1326,18 @@ class AdaptiveModelRouter:
             if request.manual_model_id and model.model_id != request.manual_model_id:
                 continue
             if not request.required_capabilities.issubset(model.capabilities):
+                continue
+            if (
+                request.estimated_input_tokens is not None
+                and model.input_token_limit is not None
+                and request.estimated_input_tokens > model.input_token_limit
+            ):
+                continue
+            if (
+                request.estimated_output_tokens is not None
+                and model.output_token_limit is not None
+                and request.estimated_output_tokens > model.output_token_limit
+            ):
                 continue
             if model.health_cooldown_until and model.health_cooldown_until > current:
                 continue
