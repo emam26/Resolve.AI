@@ -196,18 +196,35 @@ def build_policy_answer_prompt(
         len(item.evidence.text) + len(item.answer_text or "") for item in evidence
     )
     original_memory_chars = sum(len(item.content) for item in memory)
+    minimum_evidence_chars = sum(1 + bool(item.answer_text) for item in evidence)
+    minimum_memory_chars = len(memory)
+    minimum_item_chars = minimum_evidence_chars + minimum_memory_chars
     bounded_query = _clip_untrusted_text(
         query,
-        min(2000, query_budget_chars, context_budget_chars),
+        min(
+            2000,
+            query_budget_chars,
+            max(1, context_budget_chars - minimum_item_chars),
+        ),
     )
-    remaining = max(1, context_budget_chars - len(bounded_query))
-    memory_reserve = min(1024, max(0, remaining // 5)) if memory else 0
-    evidence_budget = max(1, remaining - memory_reserve)
-    per_item_budget = max(1, evidence_budget // max(len(evidence), 1))
+    remaining = max(0, context_budget_chars - len(bounded_query))
+    memory_reserve = (
+        min(1024, max(minimum_memory_chars, remaining // 5))
+        if memory
+        else 0
+    )
+    evidence_budget = max(0, remaining - memory_reserve)
+    evidence_minimums = [1 + bool(item.answer_text) for item in evidence]
+    evidence_extra = max(0, evidence_budget - sum(evidence_minimums))
     bounded_evidence: list[AuthorizedPolicyEvidence] = []
-    for item in evidence:
-        text_budget = max(1, (per_item_budget * 2) // 3)
-        answer_budget = max(1, per_item_budget - text_budget)
+    for index, item in enumerate(evidence):
+        minimum = evidence_minimums[index]
+        remaining_items = len(evidence) - index
+        extra = evidence_extra // remaining_items if remaining_items else 0
+        item_budget = minimum + extra
+        evidence_extra -= extra
+        text_budget = max(1, item_budget - (1 if item.answer_text else 0))
+        answer_budget = 1 if item.answer_text else 0
         bounded_policy = item.evidence.model_copy(
             update={"text": _clip_untrusted_text(item.evidence.text, text_budget)}
         )
@@ -215,11 +232,9 @@ def build_policy_answer_prompt(
             item.model_copy(
                 update={
                     "evidence": bounded_policy,
-                    "answer_text": (
-                        _clip_untrusted_text(item.answer_text, answer_budget)
-                        if item.answer_text
-                        else None
-                    ),
+                    "answer_text": _clip_untrusted_text(item.answer_text, answer_budget)
+                    if item.answer_text
+                    else None,
                 }
             )
         )
@@ -230,13 +245,17 @@ def build_policy_answer_prompt(
     )
     bounded_memory: list[UntrustedCustomerMemory] = []
     if memory and memory_reserve:
-        per_memory_budget = max(1, memory_reserve // len(memory))
-        bounded_memory = [
-            item.model_copy(
-                update={"content": _clip_untrusted_text(item.content, per_memory_budget)}
+        memory_extra = max(0, memory_reserve - minimum_memory_chars)
+        for index, item in enumerate(memory):
+            remaining_items = len(memory) - index
+            extra = memory_extra // remaining_items if remaining_items else 0
+            item_budget = 1 + extra
+            memory_extra -= extra
+            bounded_memory.append(
+                item.model_copy(
+                    update={"content": _clip_untrusted_text(item.content, item_budget)}
+                )
             )
-            for item in memory
-        ]
     bounded_memory_chars = sum(len(item.content) for item in bounded_memory)
     # This is an intentionally conservative, provider-independent upper bound;
     # it is metadata only and contains no text or secret material.

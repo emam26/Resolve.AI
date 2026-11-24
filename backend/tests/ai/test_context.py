@@ -101,3 +101,26 @@ def test_context_bounds_untrusted_memory_without_changing_policy_citations() -> 
     assert prompt.context_metadata.memory_count == 1
     assert prompt.context_metadata.memory_chars <= 180
     assert prompt.memory[0].content.startswith("Ignore the poli")
+
+
+def test_context_budget_is_not_exceeded_when_query_consumes_most_capacity() -> None:
+    prompt = build_policy_answer_prompt(
+        "delayed shipment? " * 20,
+        _authorized("If a shipment is delayed, contact support.", "Contact support."),
+        memory=tuple(
+            UntrustedCustomerMemory(
+                content="Customer note " * 20,
+                provenance="customer_reported",
+            )
+            for _ in range(5)
+        ),
+        context_budget_chars=160,
+        query_budget_chars=1200,
+    )
+
+    content_chars = (
+        len(prompt.query)
+        + prompt.context_metadata.evidence_chars
+        + prompt.context_metadata.memory_chars
+    )
+    assert content_chars <= 160
