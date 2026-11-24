@@ -16,6 +16,9 @@ def test_settings_are_safe_and_external_inference_is_disabled_by_default() -> No
     assert settings.gemini_api_key is None
     assert settings.openrouter_api_key is None
     assert settings.cloudflare_api_token is None
+    assert settings.modelscope_api_key is None
+    assert settings.agnes_api_key is None
+    assert settings.chutes_api_key is None
     assert settings.external_provider_allowed("groq") is False
 
 
@@ -23,6 +26,7 @@ def test_provider_credentials_are_loaded_as_masked_backend_secrets(monkeypatch) 
     monkeypatch.setenv("GROQ_API_KEY", "test-secret-that-must-not-be-logged")
     monkeypatch.setenv("CLOUDFLARE_ACCOUNT_ID", "test-account-that-must-not-be-logged")
     monkeypatch.setenv("CLOUDFLARE_API_TOKEN", "test-token-that-must-not-be-logged")
+    monkeypatch.setenv("CHUTES_API_KEY", "test-chutes-token-that-must-not-be-logged")
     monkeypatch.setenv("RESOLVEAI_GROQ_MODEL", "local-test-model")
     monkeypatch.setenv("RESOLVEAI_GROQ_ENABLED", "true")
 
@@ -34,12 +38,14 @@ def test_provider_credentials_are_loaded_as_masked_backend_secrets(monkeypatch) 
     assert "test-secret-that-must-not-be-logged" not in str(settings)
     assert "test-account-that-must-not-be-logged" not in repr(settings)
     assert "test-token-that-must-not-be-logged" not in repr(settings)
+    assert "test-chutes-token-that-must-not-be-logged" not in repr(settings)
     assert settings.external_provider_allowed("groq") is False
 
 
 def test_blank_private_values_are_treated_as_missing(monkeypatch) -> None:
     monkeypatch.setenv("GEMINI_API_KEY", "   ")
     monkeypatch.setenv("CLOUDFLARE_API_TOKEN", "")
+    monkeypatch.setenv("CHUTES_API_KEY", " ")
     monkeypatch.setenv("RESOLVEAI_DATABASE_URL", "")
 
     settings = ResolveAISettings(_env_file=None)
@@ -47,6 +53,7 @@ def test_blank_private_values_are_treated_as_missing(monkeypatch) -> None:
     assert settings.gemini_api_key is None
     assert settings.cloudflare_api_token is None
     assert settings.database_url is None
+    assert settings.chutes_api_key is None
 
 
 def test_invalid_provider_limits_fail_closed() -> None:

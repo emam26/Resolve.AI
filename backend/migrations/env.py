@@ -16,6 +16,11 @@ from backend.app.db.policies import (  # noqa: F401 - register shared metadata
     PolicyVersionRow,
 )
 from backend.app.rag.pgvector_store import Base as PolicyBase
+from backend.app.ai.model_control import (  # noqa: F401 - register shared metadata
+    ModelRegistryRow,
+    QuotaReservationRow,
+    QuotaWindowRow,
+)
 
 
 config = context.config

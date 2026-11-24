@@ -16,7 +16,15 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-ProviderName = Literal["groq", "gemini", "openrouter", "cloudflare"]
+ProviderName = Literal[
+    "groq",
+    "gemini",
+    "openrouter",
+    "cloudflare",
+    "modelscope",
+    "agnes",
+    "chutes",
+]
 
 
 class ResolveAISettings(BaseSettings):
@@ -65,6 +73,18 @@ class ResolveAISettings(BaseSettings):
         default=None,
         validation_alias=AliasChoices("OPENROUTER_API_KEY", "RESOLVEAI_OPENROUTER_API_KEY"),
     )
+    modelscope_api_key: SecretStr | None = Field(
+        default=None,
+        validation_alias=AliasChoices("MODELSCOPE_API_KEY", "RESOLVEAI_MODELSCOPE_API_KEY"),
+    )
+    agnes_api_key: SecretStr | None = Field(
+        default=None,
+        validation_alias=AliasChoices("AGNES_API_KEY", "RESOLVEAI_AGNES_API_KEY"),
+    )
+    chutes_api_key: SecretStr | None = Field(
+        default=None,
+        validation_alias=AliasChoices("CHUTES_API_KEY", "RESOLVEAI_CHUTES_API_KEY"),
+    )
 
     # Provider selection is explicit.  Model identifiers are inert until the
     # corresponding provider is enabled and the global gates allow requests.
@@ -84,6 +104,18 @@ class ResolveAISettings(BaseSettings):
         default="",
         validation_alias=AliasChoices("RESOLVEAI_CLOUDFLARE_MODEL", "CLOUDFLARE_MODEL"),
     )
+    modelscope_model: str = Field(
+        default="",
+        validation_alias=AliasChoices("RESOLVEAI_MODELSCOPE_MODEL", "MODELSCOPE_MODEL"),
+    )
+    agnes_model: str = Field(
+        default="",
+        validation_alias=AliasChoices("RESOLVEAI_AGNES_MODEL", "AGNES_MODEL"),
+    )
+    chutes_model: str = Field(
+        default="",
+        validation_alias=AliasChoices("RESOLVEAI_CHUTES_MODEL", "CHUTES_MODEL"),
+    )
     groq_enabled: bool = Field(default=False, validation_alias="RESOLVEAI_GROQ_ENABLED")
     gemini_enabled: bool = Field(default=False, validation_alias="RESOLVEAI_GEMINI_ENABLED")
     openrouter_enabled: bool = Field(
@@ -92,8 +124,21 @@ class ResolveAISettings(BaseSettings):
     cloudflare_enabled: bool = Field(
         default=False, validation_alias="RESOLVEAI_CLOUDFLARE_ENABLED"
     )
+    modelscope_enabled: bool = Field(
+        default=False, validation_alias="RESOLVEAI_MODELSCOPE_ENABLED"
+    )
+    agnes_enabled: bool = Field(default=False, validation_alias="RESOLVEAI_AGNES_ENABLED")
+    chutes_enabled: bool = Field(default=False, validation_alias="RESOLVEAI_CHUTES_ENABLED")
     external_inference_enabled: bool = Field(
         default=False, validation_alias="RESOLVEAI_EXTERNAL_INFERENCE_ENABLED"
+    )
+    model_discovery_enabled: bool = Field(
+        default=False, validation_alias="RESOLVEAI_MODEL_DISCOVERY_ENABLED"
+    )
+    model_catalog_ttl_seconds: int = Field(
+        default=21_600,
+        gt=0,
+        validation_alias="RESOLVEAI_MODEL_CATALOG_TTL_SECONDS",
     )
     zero_cost_mode: bool = Field(default=True, validation_alias="RESOLVEAI_ZERO_COST_MODE")
     provider_request_quota: int = Field(
@@ -171,6 +216,9 @@ class ResolveAISettings(BaseSettings):
         "cloudflare_account_id",
         "cloudflare_api_token",
         "openrouter_api_key",
+        "modelscope_api_key",
+        "agnes_api_key",
+        "chutes_api_key",
         "database_url",
         "commerce_database_url",
         "auth_secret_key",

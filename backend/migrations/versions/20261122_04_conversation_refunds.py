@@ -1,6 +1,7 @@
 """Own conversation and refund persistence in the Alembic schema."""
 
 from alembic import op
+from alembic import context
 import sqlalchemy as sa
 
 
@@ -15,6 +16,9 @@ def _inspector():
 
 
 def _ensure_check(table: str, name: str, expression: str) -> None:
+    if context.is_offline_mode():
+        op.create_check_constraint(name, table, expression)
+        return
     checks = {item.get("name") for item in _inspector().get_check_constraints(table)}
     if name not in checks:
         op.create_check_constraint(name, table, expression)
@@ -27,6 +31,16 @@ def _ensure_foreign_key(
     referent_table: str,
     referent_columns: list[str],
 ) -> None:
+    if context.is_offline_mode():
+        op.create_foreign_key(
+            name,
+            table,
+            referent_table,
+            columns,
+            referent_columns,
+            ondelete="CASCADE",
+        )
+        return
     keys = {item.get("name") for item in _inspector().get_foreign_keys(table)}
     if name not in keys:
         op.create_foreign_key(
@@ -40,19 +54,29 @@ def _ensure_foreign_key(
 
 
 def _ensure_unique(table: str, name: str, columns: list[str]) -> None:
+    if context.is_offline_mode():
+        op.create_unique_constraint(name, table, columns)
+        return
     uniques = {item.get("name") for item in _inspector().get_unique_constraints(table)}
     if name not in uniques:
         op.create_unique_constraint(name, table, columns)
 
 
 def _ensure_index(table: str, name: str, columns: list[str]) -> None:
+    if context.is_offline_mode():
+        op.create_index(name, table, columns)
+        return
     indexes = {item.get("name") for item in _inspector().get_indexes(table)}
     if name not in indexes:
         op.create_index(name, table, columns)
 
 
 def upgrade() -> None:
-    tables = set(_inspector().get_table_names())
+    # Alembic's offline MockConnection has no inspection system.  Treat the
+    # offline path as a fresh schema and let the operation stream render the
+    # complete migration SQL; online upgrades retain the idempotent inspection
+    # behavior used for existing databases.
+    tables = set() if context.is_offline_mode() else set(_inspector().get_table_names())
 
     if "conversations" not in tables:
         op.create_table(
@@ -155,14 +179,15 @@ def upgrade() -> None:
             sa.PrimaryKeyConstraint("sequence_key"),
         )
 
-    bind = op.get_bind()
-    bind.execute(
-        sa.text(
-            "INSERT INTO resolveai_id_sequences (sequence_key, next_value) "
-            "VALUES ('conversation', 1001), ('message', 1001) "
-            "ON CONFLICT (sequence_key) DO NOTHING"
-        )
+    sequence_sql = sa.text(
+        "INSERT INTO resolveai_id_sequences (sequence_key, next_value) "
+        "VALUES ('conversation', 1001), ('message', 1001) "
+        "ON CONFLICT (sequence_key) DO NOTHING"
     )
+    if context.is_offline_mode():
+        op.execute(sequence_sql)
+    else:
+        op.get_bind().execute(sequence_sql)
 
     if "refund_reviews" not in tables:
         op.create_table(
