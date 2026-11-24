@@ -375,3 +375,17 @@ Unknown or insufficiently supported questions return `answer: null`, `evidence: 
 
 ## Rule for changes
 The lead owns this document and the shared OpenAPI contract when created. Worker requests a modification; lead evaluates/updates contract and communicates the change **before** multiple workers implement it. Record any change in `docs/DECISIONS.md` if it is architectural, not merely a field correction.
+
+
+## Reference UI integration (M22 local contract)
+
+- `GET /api/v1/support/conversations/{conversation_id}/order` — authenticated support agent only. Returns the existing `OrderSummary` for the server-owned linked order, limited to a queued case or a human-active/resolved case assigned to that actor. Missing/out-of-scope case or order: 404. Unauthenticated: 401; wrong role: 403. Customer `/orders/{order_id}` remains customer-only.
+- `GET /api/v1/workspace/policy-audit?limit=50` — merchant admin only; `limit` 1–100; most recent persisted policy events, existing `PolicyAuditListResponse`. 401/403 for unauthorized roles; invalid bounds: 422. Not a unified audit stream.
+- `POST /api/v1/auth/login` — existing M21 provisioned account login `{username,password}`, returns `{actor,csrf_token}` with HttpOnly session cookie. Production UI uses cookie credentials, keeps only the CSRF nonce in memory and verifies `/me`. Cookie-authenticated mutations reject a missing or empty CSRF cookie or header. No session tokens are stored in localStorage.
+
+Provisioned production sessions and admission windows use the configured
+PostgreSQL database at Alembic head `20261124_10`; unavailable or unmigrated
+auth state returns a safe `503` rather than falling back to demo auth.
+Synthetic demo authentication remains local-only and uses the bounded
+in-process test path. These additions are locally verified contracts; hosted
+cross-origin cookie behavior and owner visual approval remain separate gates.

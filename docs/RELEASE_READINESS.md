@@ -1,32 +1,33 @@
 # Local V1 Release Readiness
 
+> **M22 local status: OWNER_UAT_READY.** The reference-driven frontend is integrated and locally verified against the current API. Owner visual approval and hosted cross-origin/browser verification are still separate gates. See [UI integration handoff](UI_INTEGRATION_HANDOFF.md).
+
 This checklist describes local evidence only. ResolveAI is not deployed and no
 cloud account or paid provider call is enabled by this repository state.
 
 | Gate | Status | Evidence / limitation |
 |---|---|---|
-| Backend regression | PASS for current local tree | M20 rerun: `312 passed, 40 skipped`; the PostgreSQL-backed historical M19 result remains `341 passed, 1 intentional skip` |
+| Backend regression | PASS for current local tree | M22 full suite: `332 passed, 42 skipped`; PostgreSQL-specific checks are reported separately rather than hidden in a historical count |
 | Frontend static verification | PASS | `npm.cmd run typecheck` and `npm.cmd run build` |
-| Browser journeys | PASS (local, split evidence) | Existing suite `16/16` plus owner screenshot test `1/1` with installed system Chrome; synthetic data only. A later consolidated 17-test rerun timed out during runner shutdown and is not counted as a single 17/17 pass |
-| Authentication/authorization and business safeguards | PASS for covered local cases; distributed deployment still blocked | M21 adds provisioned scrypt accounts, opaque expiring HttpOnly sessions, logout revocation, CSRF protection, CORS credential handling, login/request admission limits, and negative tests. Demo sessions remain predictable synthetic identities and are local-only. Admission state is process-local. |
-| Health/readiness | PASS for local checks and fail-closed schema gate | `/healthz` remains liveness-only; `/readyz` checks PostgreSQL connectivity, required tables, and Alembic head `20261124_09` without running migrations. Real PostgreSQL M21 execution remains unavailable in the current Docker context. |
+| Browser journeys | PASS (local, owner UAT pending) | Current serialized system-Chrome suite `18 passed, 2 skipped`; focused production-auth recovery `2 passed`; synthetic data only. Hosted cross-origin cookie behavior is not claimed |
+| Authentication/authorization and business safeguards | PASS for tested local PostgreSQL boundary; deployment boundary remains | M22 adds provisioned scrypt accounts with PostgreSQL-backed opaque sessions, global logout/replay protection and atomic admission across two app instances. Demo sessions remain predictable synthetic identities and are local-only |
+| Health/readiness | PASS for local checks and fail-closed schema gate | `/healthz` remains liveness-only; `/readyz` checks PostgreSQL connectivity, actual required tables, and Alembic head `20261124_10` without running migrations |
 | Secret protection | PASS | Private `.env` is ignored and untracked; backend-only `SecretStr` settings; provider errors/payload tests redact credentials |
 | Deterministic customer path | PASS | External inference disabled, zero-cost mode enabled, quotas zero by default |
-| PostgreSQL/pgvector | HISTORICAL PASS; M21 runtime rerun unavailable | M19 disposable PostgreSQL 16/pgvector migration reached `20261124_09 (head)`. WSL/Docker is healthy now, but no `resolveai-m15-pg` container or `resolveai` volume exists in the current context; no M21 PostgreSQL pass is claimed. |
+| PostgreSQL/pgvector | PASS for current isolated local verification | Existing `resolveai-local-dev-postgres` (`pgvector/pgvector:pg16`, `127.0.0.1:55436`) reached `20261124_10`; 108 integration tests passed against isolated synthetic `resolveai_m16db` |
 | Local load probes | PASS (bounded probe) | 10-second load/stress/soak results are in `BENCHMARKS.md`; not a capacity claim |
 | Hosted model qualification | NOT QUALIFIED | One Groq synthetic candidate was rejected after 1/6 application model-accepted answers; Gemini was excluded because free-tier privacy and exact model quota evidence were not sufficient |
 | Real-model customer quality | NOT VERIFIED | Previous local Gemma quality gate did not pass; deterministic fallback remains default |
-| Independent review | CONDITIONAL PASS | The bounded read-only M21 review completed and accepted local fail-closed controls. It identified process-local sessions/admission and incomplete historical provider accounting as remaining blockers; the migration-head, malformed-token and cross-origin CSRF response-path fixes were lead-rechecked. |
+| Independent review | PASS for M22 remediation scope | Read-only follow-up reviewed production PostgreSQL enforcement, PID start-time validation, production Playwright server isolation, and `csrf_required` session recovery; all four prior findings were marked resolved. It did not establish hosted-origin behavior |
 | Deployment | NOT IN SCOPE | No push, merge, cloud resource, billing, or deployment was performed |
 
 ## M20 owner-acceptance disposition
 
 Local manual UAT can proceed at the URLs in
 [`uat/OWNER_WALKTHROUGH.md`](uat/OWNER_WALKTHROUGH.md). Public deployment is
-not approved: deployment-scale shared admission storage, real PostgreSQL
-runtime verification in this environment, and hosted model qualification
-remain open. The M19 usage ledger is incomplete, so no new live provider
-tranche is authorized by this work.
+not approved: hosted cross-origin cookie behavior, owner visual acceptance and
+hosted model qualification remain open. The M19 usage ledger is incomplete, so
+no new live provider tranche is authorized by this work.
 
 ## Remaining local-V1 gates
 

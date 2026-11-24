@@ -17,11 +17,11 @@ AI is a system actor; not a customer/staff role.
 ## Application shape
 - **Backend:** one Python/FastAPI/Pydantic application, SQLAlchemy/Alembic and PostgreSQL; explicit server-side authorization and state transitions.
 - **AI/RAG:** one LangGraph workflow using one LLM SDK; authorized Python tools for order facts; published Markdown/plain-text policy chunks and metadata, sentence-transformers embeddings + pgvector; PostgreSQL full-text baseline. Deterministic fake LLM for most tests; user-authorized live model eval later.
-- **Frontend:** React + TypeScript + Vite, React Router. Staff UI with sign-in/demo workspace, overview, knowledge, inbox, refund review, minimal team/settings. Separate lightweight embeddable widget. Stable loading/empty/denial/error states.
+- **Frontend:** React + TypeScript + Vite with query-surface navigation. Staff UI with sign-in/demo workspace, overview, knowledge, inbox, refund review, minimal team/settings. Separate lightweight embeddable widget. Stable loading/empty/denial/error states.
 - **Engineering:** pytest/HTTPX, focused frontend checks, Git, Docker Compose and GitHub Actions when needed. No premature microservices, Redis, Celery, Kubernetes, CrewAI, separate vector DB, arbitrary agent architectures or payment-write API.
 
 ## Visual contract
-Preserve approved B2B SaaS palette: dark navy sidebar `#112a37`, teal action `#137b74`, pale page canvas `#f5f8f8`, white panels/cards. Three-pane support inbox on desktop, evidence drawer on mobile, separate embedded widget. Existing prototype in `references/` is a *visual reference*, not working source.
+Preserve approved B2B SaaS palette: dark navy sidebar `#102b39`, teal action `#128476`, pale page canvas `#f5f8f7`, white panels/cards. Three-pane support inbox on desktop, evidence drawer on mobile, separate embedded widget. Existing prototype in `references/` is the authoritative visual specification, not working production source.
 
 ## Security and important distinctions
 - Explicitly labeled demo authentication is acceptable only for synthetic records. Protect other customers' orders; authorization comes from server identity, not client-supplied role/order ID.

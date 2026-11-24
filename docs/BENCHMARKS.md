@@ -22,12 +22,34 @@ holdout, deployment, or payment action was performed.
 | Python compilation, dependency and diff checks | Passed | `compileall`, `pip check`, `git diff --check` |
 | WSL/Docker inspection | WSL/Docker healthy | The claimed `resolveai-m15-pg` container and `resolveai` volume were absent; unrelated CVAT containers were not touched |
 
-The production authentication path uses provisioned scrypt account hashes,
+The M21 production authentication path used provisioned scrypt account hashes,
 opaque expiring HttpOnly cookies, CSRF tokens, credentialed CORS, logout
-revocation, and bounded process-local admission controls. Process-local
-sessions/admission are not evidence for a multi-instance deployment. The
-code-owned Alembic head is `20261124_09`; `/readyz` fails closed when the
+revocation, and bounded process-local admission controls. M22 adds a
+PostgreSQL-backed session/admission path for provisioned production auth; the
+SQLite/process-local path remains an explicit deterministic-test fallback. The
+code-owned Alembic head is now `20261124_10`; `/readyz` fails closed when the
 configured PostgreSQL schema or revision is missing.
+
+## M22 integrated frontend and PostgreSQL checkpoint
+
+These are new local results from the current working tree. They use synthetic
+data only, do not include provider calls, and do not establish deployment or
+owner visual acceptance.
+
+| Evidence | Result | Limits |
+| --- | --- | --- |
+| Full backend regression | `332 passed, 42 skipped` | The 42 skips are opt-in PostgreSQL/commerce checks without `RESOLVEAI_TEST_POSTGRES_URL`; the real PostgreSQL subset is reported below |
+| Real PostgreSQL migrations | Alembic upgrade/current reached `20261124_10 (head)` in the existing database and isolated synthetic databases | Existing `resolveai-local-dev-postgres` volume preserved; no unrelated container changed |
+| Existing PostgreSQL integration suites | `108 passed` | Ran against isolated synthetic `resolveai_m16db`; includes persistence, policy/indexing, pgvector/FTS, memory, commerce, quota, simulation and durable-auth checks |
+| Durable production-auth PostgreSQL checks | Included in the `108` above | Session sharing/revocation across two app instances and atomic admission across two repositories; credentials were synthetic test values |
+| PostgreSQL seed | Structured synthetic seed completed for four orders, two payments and two shipments | Local evaluation database only; operational records were not exported |
+| PG-backed API smoke | Health `200`, readiness `200`, owned `eval_order_001` returned, foreign `eval_order_003` returned `404` | Temporary server; deterministic/demo auth; no hosted provider |
+| Frontend typecheck/build | Passed | Local Windows Node dependencies |
+| Playwright functional suite | `18 passed, 2 skipped`, one worker, installed system Chrome | The two production-mode tests are selected only for their separate focused run; synthetic fixture/local API |
+| Playwright production-auth checks | `2 passed` | Separate production-mode server on isolated ports; expired-session and `403 csrf_required` recovery, mocked synthetic API routes |
+| Production-session expiry browser check | `1 passed` | Synthetic mocked login/API; hosted cross-origin cookie behavior remains unverified |
+| Local lifecycle scripts | PowerShell parse, start, status and targeted container safety checks passed | Existing backend/frontend were recognized as unmanaged and left untouched; scripts never delete containers/volumes |
+| Visual reference check | Dashboard and widget screenshots spot-checked against approved direction | Owner pixel/visual acceptance is still required |
 
 ## Current readiness checkpoint
 
@@ -136,3 +158,7 @@ This evidence does not establish live Groq/Gemini quality, provider billing
 status through an account API, active adaptive-routing models, hosted-inference
 latency, absolute capacity, cloud deployment readiness, or real-customer
 behavior.
+
+
+## Reference UI integration candidate
+No new backend, PostgreSQL, browser, provider or load benchmark pass is claimed. TypeScript typecheck and Python compileall passed. Native build, backend test collection and browser fixture navigation were blocked by environment limitations; see UI_INTEGRATION_HANDOFF.md. All earlier measurements remain historical.

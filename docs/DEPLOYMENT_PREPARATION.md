@@ -79,7 +79,7 @@ RESOLVEAI_PRODUCTION_AUTH_ENABLED=true
 RESOLVEAI_PRODUCTION_AUTH_USERS_JSON=<private JSON of provisioned scrypt hashes>
 RESOLVEAI_PRODUCTION_SESSION_TTL_SECONDS=3600
 RESOLVEAI_TRUSTED_PROXY_IPS=<only the explicitly trusted proxy CIDRs>
-RESOLVEAI_SUPPORTED_ALEMBIC_HEAD=20261124_09
+RESOLVEAI_SUPPORTED_ALEMBIC_HEAD=20261124_10
 RESOLVEAI_EXTERNAL_INFERENCE_ENABLED=false
 RESOLVEAI_ZERO_COST_MODE=true
 RESOLVEAI_PROVIDER_REQUEST_QUOTA=0
@@ -100,17 +100,19 @@ plaintext passwords, password hashes, or session tokens in Vite variables,
 localStorage, logs, or Git. The synthetic demo login remains local-only and
 must stay disabled in production.
 
-Admission controls are bounded per process. They are suitable for a single
-local process, but a multi-instance deployment still requires shared admission
-storage or an edge limit before it can claim distributed brute-force
-protection. `/readyz` fails closed when PostgreSQL is unavailable, required
-tables are missing, or `alembic_version` is not `20261124_09`; it never runs a
-migration.
+When provisioned production authentication uses PostgreSQL, sessions and
+admission windows are shared and revocable across app instances. SQLite/demo
+mode intentionally remains process-local and synthetic-only. `/readyz` fails
+closed when PostgreSQL is unavailable, any required table is missing, or
+`alembic_version` is not `20261124_10`; it never runs a migration. A hosted
+deployment still needs an explicit PostgreSQL connection and browser
+cross-origin validation before claiming readiness.
 
 For the static frontend, configure only the public API origin:
 
 ```text
 VITE_API_BASE_URL=https://<Render API hostname>
+VITE_AUTH_MODE=production
 ```
 
 Never expose `GROQ_API_KEY`, `GEMINI_API_KEY`, or any other provider credential
@@ -132,3 +134,9 @@ ResolveAI does not write refunds to a payment provider. An approved refund
 ends at `APPROVED_EXTERNAL_ACTION_REQUIRED`. Cloud deployment, billing,
 provider qualification, hosted database operations, and external payment
 actions remain unverified and out of scope for local V1.
+
+For local synthetic UAT use `VITE_AUTH_MODE=demo`. The reconstructed frontend
+production mode requires explicit provisioned login and keeps the non-secret
+CSRF nonce in memory. Local session expiry behavior is browser-tested; actual
+separately hosted cookie behavior remains unverified. See
+`UI_INTEGRATION_HANDOFF.md` before any deployment.

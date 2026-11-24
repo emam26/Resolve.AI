@@ -49,7 +49,7 @@ identities are not suitable for public deployment.
 
 ## Customer-to-resolution path
 
-1. Open the main URL and start the customer session.
+1. Open the main URL, select **Customer widget**, and start the customer session (or open `?surface=widget` directly).
 2. Enter `order_1001` and open the widget conversation. The record is synthetic
    and should remain customer-scoped.
 3. Ask `Are delivery dates guaranteed?`. Confirm that the answer is grounded,
@@ -58,13 +58,8 @@ identities are not suitable for public deployment.
 4. Ask an unsupported question, such as `What is your password reset policy?`.
    Confirm that the application recommends human review and does not invent a
    policy answer or citation.
-5. Request human support. In the support surface, start `support_001`, claim
-   the queued conversation, send a human reply, and resolve it. After takeover,
-   autonomous customer replies remain blocked.
-6. Create a refund review from the human-active support conversation. In the
-   separate refund surface, start `refund_approver_001` and approve or reject
-   the request. Approval must display
-   `APPROVED_EXTERNAL_ACTION_REQUIRED`; no payment operation is performed.
+5. Request human support. In Conversations, start `support_001`, claim the queued conversation, check the linked order and send a human reply. After takeover, autonomous customer replies remain blocked.
+6. While the case is still human-active, create a refund review. In Refund approvals, start `refund_approver_001` and approve or reject the request. Approval must display `APPROVED_EXTERNAL_ACTION_REQUIRED`; no payment operation is performed. Resolve the support conversation after creating the refund review.
 
 ## Workspace and policy inspection
 
@@ -89,3 +84,6 @@ been observed in the current running session.
 For automated evidence, see [`BENCHMARKS.md`](../BENCHMARKS.md),
 [`PROJECT_STATE.md`](../PROJECT_STATE.md), and the screenshots in this
 directory. Screenshots are synthetic UI evidence, not production claims.
+
+## Reconstructed UI checks (pending owner acceptance)
+Inspect all fourteen reference pages. Test Support tickets as a case follow-up queue; Orders as a case-linked directory; Retrieval playground as published catalog inspection; Audit history as admin-only policy events. Do not mistake those restricted features for full ticketing, commerce integration, model evaluation or global audit. Use `VITE_AUTH_MODE=demo` locally; production-mode login requires separately configured provisioned accounts. Existing screenshots are historical, not current UI approval.
