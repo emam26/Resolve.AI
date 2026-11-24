@@ -112,9 +112,14 @@ def test_production_rejects_predictable_demo_authentication() -> None:
             demo_auth_enabled=True,
         )
 
-    settings = ResolveAISettings(
-        _env_file=None,
-        environment="production",
-        demo_auth_enabled=False,
-    )
-    assert settings.demo_auth_enabled is False
+    with pytest.raises(ValidationError, match="PRODUCTION_AUTH_ENABLED"):
+        ResolveAISettings(
+            _env_file=None,
+            environment="production",
+            demo_auth_enabled=False,
+        )
+
+
+def test_production_requires_the_code_supported_migration_head() -> None:
+    with pytest.raises(ValidationError, match="code-supported head"):
+        ResolveAISettings(_env_file=None, supported_alembic_head="20261124_08")

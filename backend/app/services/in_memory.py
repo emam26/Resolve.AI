@@ -271,6 +271,7 @@ class InMemoryResolveService:
         commerce_repository: CommerceRepository | None = None,
         policy_index_updater: PolicyIndexUpdater | None = None,
         session_ttl_seconds: int = 3_600,
+        expected_alembic_head: str | None = None,
     ) -> None:
         if session_ttl_seconds <= 0:
             raise ValueError("session_ttl_seconds must be positive")
@@ -283,7 +284,9 @@ class InMemoryResolveService:
         configured_database_url = database_url or "sqlite+pysqlite:///:memory:"
         database_engine = create_database_engine(configured_database_url)
         self._repository = ConversationRepository(
-            configured_database_url, engine=database_engine
+            configured_database_url,
+            engine=database_engine,
+            expected_alembic_head=expected_alembic_head,
         )
         self._memory_repository = CustomerMemoryRepository(
             configured_database_url, engine=database_engine, initialize_schema=False
@@ -318,14 +321,21 @@ class InMemoryResolveService:
                 ),
             ),
         }
-        self._repository.ensure_conversation(
-            "conv_foreign_001",
-            owner_customer_id="customer_002",
-            channel="widget",
-            state="AI_ACTIVE",
-            order_id="order_1002",
-            created_at=MESSAGE_TIMESTAMP,
-        )
+        try:
+            self._repository.ensure_conversation(
+                "conv_foreign_001",
+                owner_customer_id="customer_002",
+                channel="widget",
+                state="AI_ACTIVE",
+                order_id="order_1002",
+                created_at=MESSAGE_TIMESTAMP,
+            )
+        except SQLAlchemyError:
+            # Do not turn a reachable-but-unmigrated managed database into a
+            # process-startup crash.  The readiness route will reject it until
+            # the expected schema and Alembic head are available.
+            if database_engine.dialect.name == "sqlite":
+                raise
 
     @staticmethod
     def actor_summary(actor_id: str = DEMO_ACTOR_ID) -> ActorSummary:

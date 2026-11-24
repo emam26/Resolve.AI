@@ -20,6 +20,7 @@ from sqlalchemy import (
     String,
     UniqueConstraint,
     create_engine,
+    inspect,
     insert,
     select,
     text,
@@ -32,6 +33,24 @@ from sqlalchemy.pool import StaticPool
 
 
 DEFAULT_DATABASE_URL: Final = "sqlite+pysqlite:///:memory:"
+SUPPORTED_ALEMBIC_HEAD: Final = "20261124_09"
+REQUIRED_POSTGRES_TABLES: Final = frozenset(
+    {
+        "alembic_version",
+        "conversations",
+        "conversation_messages",
+        "refund_reviews",
+        "customer_memories",
+        "policy_versions",
+        "policy_sections",
+        "policy_embeddings",
+        "policy_index_jobs",
+        "policy_audit_events",
+        "ai_model_registry",
+        "ai_quota_windows",
+        "ai_quota_reservations",
+    }
+)
 _UNSET = object()
 
 
@@ -141,21 +160,48 @@ class ConversationRepository:
         *,
         engine: Engine | None = None,
         initialize_schema: bool | None = None,
+        expected_alembic_head: str | None = None,
     ) -> None:
         self._engine = engine or create_database_engine(database_url)
+        self._expected_alembic_head = expected_alembic_head
         if initialize_schema is None:
             initialize_schema = self._engine.dialect.name == "sqlite"
         if initialize_schema:
             Base.metadata.create_all(self._engine)
         self._session_factory = sessionmaker(self._engine, expire_on_commit=False)
-        self._initialize_sequences()
+        try:
+            self._initialize_sequences()
+        except SQLAlchemyError:
+            # A managed PostgreSQL database may be reachable before its
+            # migrations have been applied.  Keep the application constructible
+            # so /readyz can fail closed with a non-ready response; request
+            # paths remain unavailable until the migration head is present.
+            if self._engine.dialect.name == "sqlite":
+                raise
 
     def database_ready(self) -> bool:
-        """Return whether the configured database accepts a simple query."""
+        """Return whether the database is connected and migration-compatible.
+
+        SQLite remains the intentionally self-initializing local test store.
+        PostgreSQL is treated as a managed deployment dependency: connectivity
+        alone is not readiness, and no migration is run from this check.
+        """
 
         try:
             with self._engine.connect() as connection:
                 connection.execute(text("SELECT 1"))
+                if self._engine.dialect.name != "sqlite":
+                    inspector = inspect(connection)
+                    if not REQUIRED_POSTGRES_TABLES.issubset(
+                        set(inspector.get_table_names())
+                    ):
+                        return False
+                    if self._expected_alembic_head:
+                        version = connection.execute(
+                            text("SELECT version_num FROM alembic_version")
+                        ).scalar_one_or_none()
+                        if version != self._expected_alembic_head:
+                            return False
             return True
         except SQLAlchemyError:
             return False

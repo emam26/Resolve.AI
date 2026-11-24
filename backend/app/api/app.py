@@ -1,6 +1,9 @@
 """Testable FastAPI routes for the deterministic M1 API slice."""
 
 from datetime import datetime, timedelta, timezone
+from contextvars import ContextVar
+import hmac
+import secrets
 from typing import Awaitable, Callable, Literal
 
 from fastapi import Body, FastAPI, Header, Query, Request
@@ -14,6 +17,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from backend.app.contracts import (
     AppendMessageRequest,
     AppendMessageResponse,
+    ActorSummary,
     ConversationSummary,
     CreateConversationRequest,
     CreateRefundRequest,
@@ -57,6 +61,14 @@ from backend.app.services.in_memory import (
     PolicyValidationError,
     RefundValidationError,
 )
+from backend.app.services.auth import (
+    AdmissionLimiter,
+    AuthConfigurationError,
+    AuthSessionStore,
+    client_ip,
+    load_provisioned_accounts,
+    parse_trusted_proxy_networks,
+)
 from backend.app.db.policies import PolicyIndexUpdateError, PolicyIndexUpdater
 from backend.app.services.policy_management import PolicyManagementService
 from backend.app.api.staff_models import (
@@ -86,6 +98,7 @@ UNAUTHENTICATED = {
     "message": "Authentication is required.",
     "details": {},
 }
+_request_context: ContextVar[Request | None] = ContextVar("resolveai_request", default=None)
 
 
 def _error(status_code: int, code: str, message: str) -> JSONResponse:
@@ -348,6 +361,21 @@ class _PolicyRevisionRequest(BaseModel):
     expected_revision: int | None = Field(default=None, ge=1)
 
 
+class _ProductionLoginRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    username: str = Field(min_length=1, max_length=128)
+    password: str = Field(min_length=1, max_length=256)
+
+
+class _ProductionLoginResponse(BaseModel):
+    actor: ActorSummary
+    # This is a CSRF nonce, not an authentication credential.  Returning it
+    # allows a separately hosted frontend to submit the header even though the
+    # API-domain CSRF cookie is intentionally host-only.
+    csrf_token: str
+
+
 def create_app(
     database_url: str | None = None,
     *,
@@ -356,19 +384,27 @@ def create_app(
     investigation_model: InvestigationModel | None = None,
     commerce_repository: CommerceRepository | None = None,
     policy_index_updater: PolicyIndexUpdater | None = None,
+    settings: ResolveAISettings | None = None,
 ) -> FastAPI:
     """Create an API application with configurable local conversation storage."""
 
     app = FastAPI()
-    settings = get_settings()
+    settings = settings or get_settings()
     configured_origins = settings.cors_origins
     allowed_origins = [origin.strip() for origin in configured_origins.split(",") if origin.strip()]
     app.add_middleware(
         CORSMiddleware,
         allow_origins=allowed_origins,
-        allow_credentials=False,
+        allow_credentials=True,
         allow_methods=["GET", "POST", "PUT", "PATCH", "OPTIONS"],
-        allow_headers=["Accept", "Authorization", "Content-Type", "Idempotency-Key", "X-Request-ID"],
+        allow_headers=[
+            "Accept",
+            "Authorization",
+            "Content-Type",
+            "Idempotency-Key",
+            "X-Request-ID",
+            "X-CSRF-Token",
+        ],
         expose_headers=["X-Request-ID"],
     )
 
@@ -378,10 +414,12 @@ def create_app(
     ) -> Response:
         correlation_id = new_correlation_id(request.headers.get("X-Request-ID"))
         token = set_correlation_id(correlation_id)
+        request_token = _request_context.set(request)
         try:
             response = await call_next(request)
         finally:
             reset_correlation_id(token)
+            _request_context.reset(request_token)
         response.headers["X-Request-ID"] = correlation_id
         return response
 
@@ -418,12 +456,115 @@ def create_app(
         commerce_repository=configured_commerce_repository,
         policy_index_updater=configured_policy_index_updater,
         session_ttl_seconds=settings.demo_session_ttl_seconds,
+        expected_alembic_head=settings.supported_alembic_head,
     )
+    production_auth: AuthSessionStore | None = None
+    if settings.production_auth_enabled:
+        try:
+            production_auth = AuthSessionStore(
+                load_provisioned_accounts(
+                    None
+                    if settings.production_auth_users_json is None
+                    else settings.production_auth_users_json.get_secret_value()
+                ),
+                secret_key=(
+                    ""
+                    if settings.auth_secret_key is None
+                    else settings.auth_secret_key.get_secret_value()
+                ),
+                ttl_seconds=settings.production_session_ttl_seconds,
+            )
+        except AuthConfigurationError:
+            # A production configuration error must fail startup rather than
+            # silently falling back to synthetic authentication.
+            raise
+    login_limiter = AdmissionLimiter(
+        limit=settings.login_rate_limit,
+        window_seconds=settings.login_rate_window_seconds,
+    )
+    request_limiter = AdmissionLimiter(
+        limit=settings.request_rate_limit,
+        window_seconds=settings.request_rate_window_seconds,
+    )
+    trusted_proxy_networks = parse_trusted_proxy_networks(settings.trusted_proxy_ips)
     policy_management = PolicyManagementService(repository=service.policy_repository)
     app.state.service = service
     app.state.policy_retriever = configured_policy_retriever
     app.state.response_provider = configured_response_provider
     app.state.commerce_repository = configured_commerce_repository
+    app.state.production_auth = production_auth
+
+    def _request_ip(request: Request) -> str:
+        return client_ip(
+            remote=None if request.client is None else request.client.host,
+            forwarded_for=request.headers.get("X-Forwarded-For"),
+            trusted_networks=trusted_proxy_networks,
+        )
+
+    def _production_token(request: Request) -> str | None:
+        return _bearer_token(request.headers.get("Authorization")) or request.cookies.get(
+            settings.auth_cookie_name
+        )
+
+    def _actor_for_request(request: Request) -> ActorSummary | None:
+        token = _production_token(request)
+        if production_auth is not None:
+            actor = production_auth.actor_for_session(token)
+            if actor is not None:
+                return actor
+        return service.actor_for_session(_bearer_token(request.headers.get("Authorization")))
+
+    def _rate_limit_response(retry_after: int) -> JSONResponse:
+        response = _error(429, "rate_limited", "Too many requests. Please retry later.")
+        response.headers["Retry-After"] = str(max(1, retry_after))
+        return response
+
+    def _check_login_admission(request: Request | None, username: str) -> JSONResponse | None:
+        if request is None:
+            return _error(500, "authentication_unavailable", "Authentication is unavailable.")
+        result = login_limiter.check(
+            (
+                f"ip:{_request_ip(request)}",
+                f"username:{username.strip().casefold()[:128]}",
+            )
+        )
+        return None if result.allowed else _rate_limit_response(result.retry_after_seconds)
+
+    @app.middleware("http")
+    async def admission_middleware(
+        request: Request, call_next: Callable[[Request], Awaitable[Response]]
+    ) -> Response:
+        path = request.url.path
+        if (
+            request.method in {"POST", "PUT", "PATCH", "DELETE"}
+            and path not in {"/api/v1/auth/demo-login", "/api/v1/auth/login"}
+        ):
+            actor = _actor_for_request(request)
+            keys = [f"ip:{_request_ip(request)}"]
+            if actor is not None:
+                keys.append(f"actor:{actor.actor_id}")
+            result = request_limiter.check(keys)
+            if not result.allowed:
+                return _rate_limit_response(result.retry_after_seconds)
+        return await call_next(request)
+
+    @app.middleware("http")
+    async def csrf_middleware(
+        request: Request, call_next: Callable[[Request], Awaitable[Response]]
+    ) -> Response:
+        cookie_token = request.cookies.get(settings.auth_cookie_name)
+        if (
+            production_auth is not None
+            and cookie_token
+            and request.method in {"POST", "PUT", "PATCH", "DELETE"}
+            and request.url.path not in {"/api/v1/auth/login", "/api/v1/auth/demo-login"}
+            and not hmac.compare_digest(
+                request.cookies.get(settings.csrf_cookie_name, ""),
+                request.headers.get("X-CSRF-Token", ""),
+            )
+        ):
+            return _error(403, "csrf_required", "A CSRF token is required.")
+        return await call_next(request)
 
     @app.get("/readyz")
     async def readinesscheck():
@@ -466,12 +607,49 @@ def create_app(
         return _error(422, "validation_error", "Request validation failed.")
 
     def current_actor(authorization: str | None):
+        request = _request_context.get()
+        if production_auth is not None and request is not None:
+            token = _bearer_token(authorization) or request.cookies.get(settings.auth_cookie_name)
+            actor = production_auth.actor_for_session(token)
+            if actor is not None:
+                return actor
         return service.actor_for_session(_bearer_token(authorization))
+
+    def _set_auth_cookies(response: Response, token: str) -> str:
+        secure = settings.environment.casefold() not in {"local", "development", "test"}
+        same_site = "none" if secure else "lax"
+        csrf_token = secrets.token_urlsafe(24)
+        response.set_cookie(
+            settings.auth_cookie_name,
+            token,
+            max_age=settings.production_session_ttl_seconds,
+            httponly=True,
+            secure=secure,
+            samesite=same_site,
+            path="/",
+        )
+        response.set_cookie(
+            settings.csrf_cookie_name,
+            csrf_token,
+            max_age=settings.production_session_ttl_seconds,
+            httponly=False,
+            secure=secure,
+            samesite=same_site,
+            path="/",
+        )
+        return csrf_token
+
+    def _clear_auth_cookies(response: Response) -> None:
+        response.delete_cookie(settings.auth_cookie_name, path="/")
+        response.delete_cookie(settings.csrf_cookie_name, path="/")
 
     @router.post("/auth/demo-login", response_model=DemoLoginResponse)
     async def demo_login(request: DemoLoginRequest):
         if not settings.demo_auth_enabled:
             return _error(404, "not_found", "The requested resource was not found.")
+        admission = _check_login_admission(_request_context.get(), request.demo_actor_id)
+        if admission is not None:
+            return admission
         response = service.demo_login(request.demo_actor_id)
         if response is None:
             return _error(
@@ -481,11 +659,45 @@ def create_app(
             )
         return response
 
+    @router.post("/auth/login", response_model=_ProductionLoginResponse)
+    async def production_login(
+        request: _ProductionLoginRequest,
+        response: Response,
+    ):
+        if production_auth is None:
+            return _error(404, "not_found", "The requested resource was not found.")
+        http_request = _request_context.get()
+        if http_request is None:
+            return _error(500, "authentication_unavailable", "Authentication is unavailable.")
+        admission = _check_login_admission(http_request, request.username)
+        if admission is not None:
+            return admission
+        credentials = production_auth.login(request.username, request.password)
+        if credentials is None:
+            return _error(401, "invalid_credentials", "Invalid username or password.")
+        token, actor = credentials
+        csrf_token = _set_auth_cookies(response, token)
+        return _ProductionLoginResponse(actor=actor, csrf_token=csrf_token)
+
     @router.post("/auth/logout", status_code=204)
-    async def logout(authorization: str | None = Header(default=None)):
-        if not service.logout(_bearer_token(authorization)):
+    async def logout(
+        response: Response,
+        authorization: str | None = Header(default=None),
+    ):
+        request = _request_context.get()
+        production_token = (
+            _bearer_token(authorization)
+            or (None if request is None else request.cookies.get(settings.auth_cookie_name))
+        )
+        production_logged_out = (
+            production_auth is not None and production_auth.revoke(production_token)
+        )
+        demo_logged_out = service.logout(_bearer_token(authorization))
+        if not production_logged_out and not demo_logged_out:
             return _error(401, UNAUTHENTICATED["code"], UNAUTHENTICATED["message"])
-        return Response(status_code=204)
+        _clear_auth_cookies(response)
+        response.status_code = 204
+        return response
 
     @router.get("/me")
     async def get_me(authorization: str | None = Header(default=None)):

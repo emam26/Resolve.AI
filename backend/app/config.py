@@ -262,12 +262,63 @@ class ResolveAISettings(BaseSettings):
         default=None,
         validation_alias=AliasChoices("RESOLVEAI_AUTH_SECRET_KEY", "AUTH_SECRET_KEY"),
     )
+    production_auth_enabled: bool = Field(
+        default=False, validation_alias="RESOLVEAI_PRODUCTION_AUTH_ENABLED"
+    )
+    production_auth_users_json: SecretStr | None = Field(
+        default=None, validation_alias="RESOLVEAI_PRODUCTION_AUTH_USERS_JSON"
+    )
+    auth_cookie_name: str = Field(
+        default="resolveai_session",
+        min_length=1,
+        max_length=64,
+        validation_alias="RESOLVEAI_AUTH_COOKIE_NAME",
+    )
+    csrf_cookie_name: str = Field(
+        default="resolveai_csrf",
+        min_length=1,
+        max_length=64,
+        validation_alias="RESOLVEAI_CSRF_COOKIE_NAME",
+    )
     demo_auth_enabled: bool = Field(default=True, validation_alias="RESOLVEAI_DEMO_AUTH_ENABLED")
     demo_session_ttl_seconds: int = Field(
         default=3_600,
         gt=0,
         le=86_400,
         validation_alias="RESOLVEAI_DEMO_SESSION_TTL_SECONDS",
+    )
+    production_session_ttl_seconds: int = Field(
+        default=3_600,
+        gt=0,
+        le=86_400,
+        validation_alias="RESOLVEAI_PRODUCTION_SESSION_TTL_SECONDS",
+    )
+    trusted_proxy_ips: str = Field(
+        default="", validation_alias="RESOLVEAI_TRUSTED_PROXY_IPS"
+    )
+    login_rate_limit: int = Field(
+        default=10, ge=1, le=10_000, validation_alias="RESOLVEAI_LOGIN_RATE_LIMIT"
+    )
+    login_rate_window_seconds: int = Field(
+        default=60,
+        gt=0,
+        le=86_400,
+        validation_alias="RESOLVEAI_LOGIN_RATE_WINDOW_SECONDS",
+    )
+    request_rate_limit: int = Field(
+        default=120, ge=1, le=100_000, validation_alias="RESOLVEAI_REQUEST_RATE_LIMIT"
+    )
+    request_rate_window_seconds: int = Field(
+        default=60,
+        gt=0,
+        le=86_400,
+        validation_alias="RESOLVEAI_REQUEST_RATE_WINDOW_SECONDS",
+    )
+    supported_alembic_head: str = Field(
+        default="20261124_09",
+        min_length=1,
+        max_length=64,
+        validation_alias="RESOLVEAI_SUPPORTED_ALEMBIC_HEAD",
     )
 
     @model_validator(mode="after")
@@ -279,6 +330,19 @@ class ResolveAISettings(BaseSettings):
                 "production requires RESOLVEAI_DEMO_AUTH_ENABLED=false; "
                 "demo authentication is synthetic-only"
             )
+        if self.supported_alembic_head != "20261124_09":
+            raise ValueError(
+                "RESOLVEAI_SUPPORTED_ALEMBIC_HEAD must match the code-supported head"
+            )
+        if self.environment.casefold() == "production" and not self.production_auth_enabled:
+            raise ValueError(
+                "production requires RESOLVEAI_PRODUCTION_AUTH_ENABLED=true"
+            )
+        if self.environment.casefold() == "production" and self.production_auth_enabled:
+            if self.auth_secret_key is None or len(self.auth_secret_key.get_secret_value().encode("utf-8")) < 32:
+                raise ValueError("production authentication requires a 32-byte auth secret")
+            if self.production_auth_users_json is None:
+                raise ValueError("production authentication requires provisioned accounts")
         return self
 
     @field_validator(
@@ -295,6 +359,7 @@ class ResolveAISettings(BaseSettings):
         "database_url",
         "commerce_database_url",
         "auth_secret_key",
+        "production_auth_users_json",
         mode="before",
     )
     @classmethod
