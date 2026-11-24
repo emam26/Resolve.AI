@@ -30,6 +30,7 @@ _EVENT_FIELDS: Final = {
         {"retrieval_mode", "error_category", "error_type"}
     ),
     "policy_generation_fallback": frozenset({"error_category", "error_type"}),
+    "customer_memory_unavailable": frozenset({"error_category", "error_type"}),
 }
 _RETRIEVAL_MODES: Final = frozenset(
     {"not_applicable", "lexical", "semantic", "lexical_fallback"}
@@ -52,6 +53,7 @@ _ERROR_CATEGORIES: Final = frozenset(
     {
         "invalid_model_output",
         "model_provider_unavailable",
+        "optional_context_unavailable",
         "semantic_backend_unavailable",
         "workflow_exception",
     }

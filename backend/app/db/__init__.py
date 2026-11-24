@@ -2,6 +2,16 @@
 
 from .conversations import ConversationRepository, StoredConversation, StoredMessage
 from .refunds import RefundRepository, StoredRefund
+from .memory import (
+    MAX_MEMORY_CONTENT_CHARS,
+    MAX_MEMORY_RECORDS_PER_CUSTOMER,
+    MEMORY_PROVENANCES,
+    CustomerMemoryConflictError,
+    CustomerMemoryLimitError,
+    CustomerMemoryRepository,
+    CustomerMemoryValidationError,
+    StoredCustomerMemory,
+)
 from .policies import (
     POLICY_STATES,
     POLICY_VISIBILITIES,
@@ -25,6 +35,14 @@ __all__ = [
     "StoredConversation",
     "StoredMessage",
     "StoredRefund",
+    "MAX_MEMORY_CONTENT_CHARS",
+    "MAX_MEMORY_RECORDS_PER_CUSTOMER",
+    "MEMORY_PROVENANCES",
+    "CustomerMemoryConflictError",
+    "CustomerMemoryLimitError",
+    "CustomerMemoryRepository",
+    "CustomerMemoryValidationError",
+    "StoredCustomerMemory",
     "POLICY_STATES",
     "POLICY_VISIBILITIES",
     "PolicyAuditRow",

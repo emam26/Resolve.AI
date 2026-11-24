@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 
+from sqlalchemy.exc import SQLAlchemyError
+
 from backend.app.ai.answer import PolicyRetriever
 from backend.app.ai.investigation import (
     InvestigationModel,
@@ -12,7 +14,7 @@ from backend.app.ai.investigation import (
     OrderFacts,
     run_investigation,
 )
-from backend.app.ai.generation import PolicyAnswerProvider
+from backend.app.ai.generation import PolicyAnswerProvider, UntrustedCustomerMemory
 from backend.app.contracts import (
     ActorSummary,
     AppendMessageResponse,
@@ -29,6 +31,9 @@ from backend.app.contracts import (
 )
 from backend.app.db import (
     ConversationRepository,
+    CustomerMemoryLimitError,
+    CustomerMemoryRepository,
+    CustomerMemoryValidationError,
     PolicyConflict,
     PolicyIndexUpdater,
     PolicyRepository,
@@ -42,6 +47,7 @@ from backend.app.db import (
 )
 from backend.app.db.conversations import create_database_engine
 from backend.app.commerce import CommerceRepository
+from backend.app.diagnostics import log_event
 
 
 class _DemoInvestigationModel:
@@ -273,6 +279,9 @@ class InMemoryResolveService:
         database_engine = create_database_engine(configured_database_url)
         self._repository = ConversationRepository(
             configured_database_url, engine=database_engine
+        )
+        self._memory_repository = CustomerMemoryRepository(
+            configured_database_url, engine=database_engine, initialize_schema=False
         )
         self._refund_repository = RefundRepository(
             configured_database_url, engine=database_engine
@@ -622,6 +631,45 @@ class InMemoryResolveService:
         if updated is None:
             raise ConversationStateConflict("resolved conversations are read-only")
         message = updated.messages[-1]
+        try:
+            prior_memory = self._memory_repository.list_for_customer(actor.customer_id or "")
+        except (CustomerMemoryValidationError, SQLAlchemyError, OSError) as error:
+            # Memory is optional continuity context. A database/read outage must
+            # not block the authorized customer investigation or reveal details.
+            log_event(
+                "customer_memory_unavailable",
+                error_category="optional_context_unavailable",
+                error_type=type(error).__name__,
+            )
+            prior_memory = []
+        # Raw customer text is optional, bounded, and explicitly untrusted. It
+        # is persisted for continuity only; it is never an authorization source
+        # and is not sent to external providers as policy evidence.
+        if len(content.strip()) <= 512:
+            try:
+                self._memory_repository.add(
+                    customer_id=actor.customer_id or "",
+                    content=content,
+                    provenance="customer_reported",
+                    created_at=MESSAGE_TIMESTAMP,
+                )
+            except (
+                CustomerMemoryLimitError,
+                CustomerMemoryValidationError,
+                SQLAlchemyError,
+                OSError,
+            ) as error:
+                # A valid conversation message must not fail because optional
+                # memory capture rejects malformed text or reaches its bound.
+                log_event(
+                    "customer_memory_unavailable",
+                    error_category="optional_context_unavailable",
+                    error_type=type(error).__name__,
+                )
+        memory_context = tuple(
+            UntrustedCustomerMemory(content=item.content, provenance=item.provenance)
+            for item in prior_memory[-5:]
+        )
         investigation = run_investigation(
             content,
             model=self._investigation_model,
@@ -631,6 +679,7 @@ class InMemoryResolveService:
             order_id=updated.order_id,
             policy_retriever=self._policy_retriever,
             response_provider=self._response_provider,
+            memory=memory_context,
         )
         assistant_reply = None
         if investigation.outcome == "ANSWER" and investigation.answer is not None:
@@ -676,6 +725,13 @@ class InMemoryResolveService:
             generation_mode=investigation.generation_mode,
             citation_ids=investigation.citation_ids,
         )
+
+    def customer_memories(self, actor: ActorSummary):
+        """Return only the authenticated customer's bounded memory records."""
+
+        if actor.role != "customer" or not actor.customer_id:
+            raise ForbiddenOperation("customer identity required")
+        return self._memory_repository.list_for_customer(actor.customer_id)
 
     def handoff(
         self, conversation_id: str, actor: ActorSummary
