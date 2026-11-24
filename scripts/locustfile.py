@@ -9,8 +9,13 @@ or external customer service.  Select a profile with
 from __future__ import annotations
 
 import os
+import json
+import threading
+import time
+from datetime import datetime, timezone
+from pathlib import Path
 
-from locust import HttpUser, LoadTestShape, between, task
+from locust import HttpUser, LoadTestShape, between, events, task
 
 
 PROFILE_STAGES = {
@@ -18,6 +23,113 @@ PROFILE_STAGES = {
     "stress": ((30, 20, 10), (90, 40, 10)),
     "soak": ((60, 8, 2), (600, 8, 1)),
 }
+
+
+# Locust already reports latency percentiles and failures.  These listeners add
+# the small amount of workload metadata that is otherwise easy to lose when a
+# run is summarized, without requiring a metrics service or changing the API.
+_OBSERVATION_LOCK = threading.Lock()
+_OBSERVATION: dict[str, object] = {}
+_OBSERVATION_ENVIRONMENT = None
+
+
+@events.test_start.add_listener
+def _start_observation(environment) -> None:
+    global _OBSERVATION_ENVIRONMENT
+    _OBSERVATION_ENVIRONMENT = environment
+    with _OBSERVATION_LOCK:
+        _OBSERVATION.clear()
+        _OBSERVATION.update(
+            {
+                "started_at": datetime.now(timezone.utc).isoformat(),
+                "started_monotonic": time.monotonic(),
+                "requests": 0,
+                "failures": 0,
+                "request_names": {},
+                "failure_kinds": {},
+                "max_simulated_users": 0,
+                "provider_distribution": None,
+                "quota_contention": None,
+                "fallback_count": None,
+                "telemetry_unavailable": [
+                    "application_cpu_memory",
+                    "database_connections",
+                    "queue_depth",
+                    "provider_saturation",
+                    "recovery_time",
+                ],
+            }
+        )
+
+
+@events.request.add_listener
+def _observe_request(name, exception, context, **kwargs) -> None:
+    # The request event is emitted after each request.  ``runner.user_count``
+    # is an honest upper bound for simulated concurrency; exact application
+    # in-flight counts require application-side telemetry and are not guessed.
+    environment = kwargs.get("environment") or _OBSERVATION_ENVIRONMENT
+    user_count = getattr(getattr(environment, "runner", None), "user_count", 0)
+    context = context if isinstance(context, dict) else {}
+    with _OBSERVATION_LOCK:
+        _OBSERVATION["requests"] = int(_OBSERVATION.get("requests", 0)) + 1
+        if exception is not None:
+            _OBSERVATION["failures"] = int(_OBSERVATION.get("failures", 0)) + 1
+            failures = _OBSERVATION.setdefault("failure_kinds", {})
+            if isinstance(failures, dict):
+                key = type(exception).__name__
+                failures[key] = int(failures.get(key, 0)) + 1
+        names = _OBSERVATION.setdefault("request_names", {})
+        if isinstance(names, dict):
+            names[name] = int(names.get(name, 0)) + 1
+        _OBSERVATION["max_simulated_users"] = max(
+            int(_OBSERVATION.get("max_simulated_users", 0)), int(user_count or 0)
+        )
+        for field in ("provider", "quota_contention", "fallback"):
+            value = context.get(field)
+            if field == "provider" and value:
+                if _OBSERVATION.get("provider_distribution") is None:
+                    _OBSERVATION["provider_distribution"] = {}
+                distribution = _OBSERVATION["provider_distribution"]
+                if isinstance(distribution, dict):
+                    distribution[str(value)] = int(distribution.get(str(value), 0)) + 1
+            elif field == "quota_contention" and value:
+                _OBSERVATION["quota_contention"] = int(
+                    _OBSERVATION.get("quota_contention") or 0
+                ) + 1
+            elif field == "fallback" and value:
+                _OBSERVATION["fallback_count"] = int(
+                    _OBSERVATION.get("fallback_count") or 0
+                ) + 1
+
+
+@events.test_stop.add_listener
+def _finish_observation(environment, **kwargs) -> None:
+    with _OBSERVATION_LOCK:
+        observation = dict(_OBSERVATION)
+        started = float(observation.pop("started_monotonic", time.monotonic()))
+    observation["finished_at"] = datetime.now(timezone.utc).isoformat()
+    observation["duration_seconds"] = round(max(0.0, time.monotonic() - started), 3)
+    observation["profile"] = os.getenv("RESOLVEAI_LOCUST_PROFILE", "load").casefold()
+    observation["max_seconds"] = os.getenv("RESOLVEAI_LOCUST_MAX_SECONDS")
+    observation["concurrency_note"] = (
+        "max_simulated_users is an upper bound; exact in-flight application "
+        "telemetry was not available in this harness"
+    )
+    unavailable = set(observation.get("telemetry_unavailable", []))
+    for field, label in (
+        ("provider_distribution", "provider_distribution"),
+        ("quota_contention", "quota_contention"),
+        ("fallback_count", "fallback_frequency"),
+    ):
+        if observation.get(field) is not None:
+            unavailable.discard(label)
+    observation["telemetry_unavailable"] = sorted(unavailable)
+    destination = os.getenv("RESOLVEAI_LOCUST_METRICS_PATH")
+    if destination:
+        path = Path(destination)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(observation, indent=2, sort_keys=True), encoding="utf-8")
+    print("RESOLVEAI_LOCUST_OBSERVATION=" + json.dumps(observation, sort_keys=True))
 
 
 class LocalVerificationShape(LoadTestShape):
