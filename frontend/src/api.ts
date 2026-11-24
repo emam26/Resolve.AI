@@ -40,6 +40,14 @@ export interface ConversationResponse {
   messages: ConversationMessage[];
 }
 
+export interface OrderSummary {
+  order_id: string;
+  status: "processing" | "in_transit" | "delayed" | "delivered" | "cancelled";
+  payment_status: "pending" | "paid" | "failed";
+  shipment_status: "not_shipped" | "in_transit" | "delayed" | "delivered";
+  estimated_delivery_date: string | null;
+}
+
 export interface SupportConversationSummary {
   conversation_id: string;
   channel: ConversationResponse["channel"];
@@ -423,6 +431,14 @@ export function loginDemoMerchantAdmin(): Promise<DemoLoginResponse> {
     method: "POST",
     body: JSON.stringify({ demo_actor_id: "merchant_admin_001" }),
   });
+}
+
+export function getOrderSummary(sessionId: string, orderId: string): Promise<OrderSummary> {
+  return requestJson<OrderSummary>(
+    `/api/v1/orders/${encodeURIComponent(orderId)}`,
+    {},
+    sessionId,
+  );
 }
 
 export function getOpsSummary(sessionId: string): Promise<OpsSummary> {

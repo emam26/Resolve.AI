@@ -75,6 +75,17 @@ async function installSyntheticApi(page: Page) {
       return;
     }
 
+    if (path === "/api/v1/orders/order_1001" && method === "GET") {
+      await fulfill({
+        order_id: "order_1001",
+        status: "delayed",
+        payment_status: "paid",
+        shipment_status: "delayed",
+        estimated_delivery_date: "2026-11-08",
+      });
+      return;
+    }
+
     if (path === "/api/v1/conversations" && method === "POST") {
       conversationState = "AI_ACTIVE";
       messages = [];
@@ -218,6 +229,25 @@ test("customer gets grounded citations and safely hands off unsupported question
   await expect(widget.getByText("Human support requested", { exact: true })).toBeVisible();
   await expect(widget.getByRole("button", { name: "Request human support" })).toHaveCount(0);
   await expect(widget.getByLabel("Your message")).toBeDisabled();
+});
+
+test("customer can verify the owned order before opening a conversation", async ({ page }) => {
+  await installSyntheticApi(page);
+  await page.goto("/");
+
+  const widget = page.locator('section[aria-labelledby="widget-title"]');
+  await widget.getByRole("button", { name: "Start Demo Customer session" }).click();
+  await widget.getByLabel("Order ID").fill("order_1001");
+  await widget.getByRole("button", { name: "Check order status" }).click();
+
+  const lookup = widget.locator(".order-summary");
+  await expect(lookup).toContainText("Authorized order lookup");
+  await expect(lookup).toContainText("order_1001");
+  await expect(lookup).toContainText("delayed");
+  await expect(lookup).toContainText("2026-11-08");
+
+  await widget.getByRole("button", { name: "Open widget conversation" }).click();
+  await expect(widget.getByText(/Conversation conv_e2e/)).toBeVisible();
 });
 
 test("staff takeover, refund rejection, and resolution leave closed records read-only", async ({ page }) => {

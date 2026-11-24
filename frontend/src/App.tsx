@@ -11,6 +11,7 @@ import {
   ConversationResponse,
   DemoLoginResponse,
   getRefunds,
+  getOrderSummary,
   getSupportInbox,
   handoffCustomerConversation,
   loginDemoRefundApprover,
@@ -20,6 +21,7 @@ import {
   rejectRefund,
   resolveSupportConversation,
   RefundSummary,
+  OrderSummary,
   SupportConversationSummary,
 } from "./api";
 import WorkspaceSurface, { WorkspaceSurfaceName } from "./WorkspaceSurface";
@@ -67,10 +69,12 @@ export default function App() {
   const [conversation, setConversation] = useState<ConversationResponse | null>(null);
   const [latestResolution, setLatestResolution] = useState<AppendMessageResponse | null>(null);
   const [orderId, setOrderId] = useState("order_1001");
+  const [orderSummary, setOrderSummary] = useState<OrderSummary | null>(null);
   const [draft, setDraft] = useState("");
   const [notice, setNotice] = useState<Notice | null>(null);
   const [isStarting, setIsStarting] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
+  const [isLookingUpOrder, setIsLookingUpOrder] = useState(false);
   const [isSending, setIsSending] = useState(false);
   const [isHandingOff, setIsHandingOff] = useState(false);
   const [staffSession, setStaffSession] = useState<DemoLoginResponse | null>(null);
@@ -103,6 +107,7 @@ export default function App() {
     setNotice(null);
     setConversation(null);
     setLatestResolution(null);
+    setOrderSummary(null);
     setIsStarting(true);
     try {
       setSession(await loginDemoCustomer());
@@ -127,6 +132,21 @@ export default function App() {
       setNotice(noticeFromError(error));
     } finally {
       setIsCreating(false);
+    }
+  }
+
+  async function lookupOrder() {
+    if (!session || isLookingUpOrder || !orderId.trim()) return;
+
+    setNotice(null);
+    setOrderSummary(null);
+    setIsLookingUpOrder(true);
+    try {
+      setOrderSummary(await getOrderSummary(session.session_id, orderId.trim()));
+    } catch (error) {
+      setNotice(noticeFromError(error));
+    } finally {
+      setIsLookingUpOrder(false);
     }
   }
 
@@ -505,13 +525,42 @@ export default function App() {
                 <input
                   id="order-id"
                   value={orderId}
-                  onChange={(event) => setOrderId(event.target.value)}
+                  onChange={(event) => {
+                    setOrderId(event.target.value);
+                    setOrderSummary(null);
+                  }}
                   placeholder="order_1001"
                   autoComplete="off"
                 />
-                <button className="primary-button" type="submit" disabled={isCreating}>
+                <div className="conversation-actions">
+                  <button
+                    className="secondary-button"
+                    type="button"
+                    onClick={() => void lookupOrder()}
+                    disabled={isLookingUpOrder || !orderId.trim()}
+                  >
+                    {isLookingUpOrder ? "Checking order" : "Check order status"}
+                  </button>
+                  <button className="primary-button" type="submit" disabled={isCreating}>
                   {isCreating ? "Opening conversation…" : "Open widget conversation"}
-                </button>
+                  </button>
+                </div>
+                {orderSummary && (
+                  <section className="order-summary" aria-labelledby="order-lookup-title">
+                    <div className="order-summary-heading">
+                      <div>
+                        <span className="section-label">Authorized order lookup</span>
+                        <h4 id="order-lookup-title">{orderSummary.order_id}</h4>
+                      </div>
+                      <span className="state-badge">{orderSummary.status}</span>
+                    </div>
+                    <dl className="order-facts">
+                      <div><dt>Payment</dt><dd>{orderSummary.payment_status}</dd></div>
+                      <div><dt>Shipment</dt><dd>{orderSummary.shipment_status}</dd></div>
+                      <div><dt>Estimated delivery</dt><dd>{orderSummary.estimated_delivery_date ?? "Not provided"}</dd></div>
+                    </dl>
+                  </section>
+                )}
               </form>
             ) : (
               <>

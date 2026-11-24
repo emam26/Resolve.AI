@@ -134,6 +134,15 @@ button:disabled { cursor: not-allowed; opacity: 0.62; }
 .conversation-start { display: flex; flex-direction: column; gap: 12px; }
 
 .conversation-start > div { margin-bottom: 12px; }
+.conversation-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.conversation-actions .primary-button, .conversation-actions .secondary-button { flex: 1 1 180px; }
+.order-summary { margin-top: 4px; padding: 13px 14px; border: 1px solid #cfe5df; border-radius: 12px; background: #f5fbf9; color: #476875; }
+.order-summary-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.order-summary h4 { margin: 3px 0 0; color: #183b4b; font-size: 15px; }
+.order-facts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 12px 0 0; }
+.order-facts div { display: flex; flex-direction: column; gap: 2px; }
+.order-facts dt { color: #78939b; font-size: 10px; font-weight: 800; text-transform: uppercase; }
+.order-facts dd { margin: 0; color: #2d5260; font-size: 12px; font-weight: 700; }
 
 .conversation-start label { color: #345866; font-size: 12px; font-weight: 700; }
 
