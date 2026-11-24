@@ -201,7 +201,7 @@ async function installSyntheticApi(page: Page) {
 
 test("customer gets grounded citations and safely hands off unsupported questions", async ({ page }) => {
   await installSyntheticApi(page);
-  await page.goto("/");
+  await page.goto("/?surface=widget-preview");
 
   const widget = page.locator('section[aria-labelledby="widget-title"]');
   await expect(widget.getByRole("heading", { name: "ShopEase support", exact: true })).toBeVisible();
@@ -233,7 +233,7 @@ test("customer gets grounded citations and safely hands off unsupported question
 
 test("customer can verify the owned order before opening a conversation", async ({ page }) => {
   await installSyntheticApi(page);
-  await page.goto("/");
+  await page.goto("/?surface=widget-preview");
 
   const widget = page.locator('section[aria-labelledby="widget-title"]');
   await widget.getByRole("button", { name: "Start Demo Customer session" }).click();
@@ -252,10 +252,11 @@ test("customer can verify the owned order before opening a conversation", async 
 
 test("staff takeover, refund rejection, and resolution leave closed records read-only", async ({ page }) => {
   await installSyntheticApi(page);
-  await page.goto("/");
+  await page.goto("/?surface=widget-preview");
 
   const staff = page.locator('section[aria-labelledby="staff-title"]');
   const approval = page.locator('section[aria-labelledby="refund-title"]');
+  await page.getByRole("navigation", {name:"Application surfaces"}).getByRole("button", {name:/^Conversations/}).click();
   await staff.getByRole("button", { name: "Start Demo Support session" }).click();
   await expect(staff.getByRole("button", { name: /conv_e2e/ })).toBeVisible();
   await expect(staff.getByRole("button", { name: "Approve for external action" })).toHaveCount(0);
@@ -279,14 +280,16 @@ test("staff takeover, refund rejection, and resolution leave closed records read
   await staff.getByRole("button", { name: "Create review request" }).click();
   await expect(staff.getByRole("status")).toContainText("refund_e2e is pending separate approver review");
 
+  await page.getByRole("navigation", {name:"Application surfaces"}).getByRole("button", {name:/^Refund approvals/}).click();
   await approval.getByRole("button", { name: "Start Demo Approver session" }).click();
-  await expect(approval.getByText("refund_e2e", { exact: true })).toBeVisible();
+  await expect(approval.locator(".refund-card").getByText("refund_e2e", { exact: true })).toBeVisible();
   await approval.getByRole("button", { name: "Reject" }).click();
-  await expect(approval.getByText("REJECTED", { exact: true })).toBeVisible();
-  await expect(approval.getByRole("button", { name: "Reject" })).toHaveCount(0);
+  await expect(approval.locator(".refund-card").getByText("REJECTED", { exact: true })).toBeVisible();
+  await expect(approval.getByRole("button", { name: "Reject", exact: true })).toHaveCount(0);
   await expect(approval.getByRole("button", { name: "Approve for external action" })).toHaveCount(0);
   await expect(approval.getByText("This review is closed; no payment operation was performed.", { exact: true })).toBeVisible();
 
+  await page.getByRole("navigation", {name:"Application surfaces"}).getByRole("button", {name:/^Conversations/}).click();
   await staff.getByRole("button", { name: "Resolve" }).click();
   await expect(staff.getByText("Conversation resolved", { exact: true })).toBeVisible();
   await expect(staff.getByRole("textbox", { name: "Staff reply" })).toHaveCount(0);
@@ -306,7 +309,7 @@ test("keeps loading controls labelled and reports a customer API network failure
     });
   });
   await page.route("**/api/v1/conversations", async (route) => route.abort("failed"));
-  await page.goto("/");
+  await page.goto("/?surface=widget-preview");
 
   const widget = page.locator('section[aria-labelledby="widget-title"]');
   const startButton = widget.getByRole("button", { name: "Start Demo Customer session" });

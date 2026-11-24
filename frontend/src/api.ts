@@ -25,11 +25,6 @@ export interface DemoLoginResponse {
   actor: ActorSummary;
 }
 
-export interface ProductionLoginResponse {
-  actor: ActorSummary;
-  csrf_token: string;
-}
-
 export interface ConversationMessage {
   message_id: string;
   author_type: MessageAuthorType;
@@ -372,18 +367,38 @@ export class ApiError extends Error {
   }
 }
 
-const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL ?? "").replace(/\/$/, "");
-let csrfTokenMemory: string | null = null;
+export const productionMode = import.meta.env.VITE_AUTH_MODE === "production";
+let csrfNonce = "";
+type ProductionSessionExpiredHandler = (() => void) | null;
+let productionSessionExpiredHandler: ProductionSessionExpiredHandler = null;
+let productionSessionExpiryNotified = false;
 
-function readableCookie(name: string): string | null {
-  if (typeof document === "undefined") return null;
-  const prefix = `${encodeURIComponent(name)}=`;
-  const value = document.cookie
-    .split(";")
-    .map((entry) => entry.trim())
-    .find((entry) => entry.startsWith(prefix));
-  return value ? decodeURIComponent(value.slice(prefix.length)) : null;
+export function setProductionSessionExpiredHandler(handler: ProductionSessionExpiredHandler): void {
+  productionSessionExpiredHandler = handler;
+  if (handler === null) productionSessionExpiryNotified = false;
 }
+
+function notifyProductionSessionExpired(path: string, status: number, code?: string): void {
+  const sessionInvalid = status === 401 || (status === 403 && code === "csrf_required");
+  if (!productionMode || !sessionInvalid || path === "/api/v1/auth/login" || path === "/api/v1/auth/logout") return;
+  if (productionSessionExpiryNotified) return;
+  productionSessionExpiryNotified = true;
+  productionSessionExpiredHandler?.();
+}
+
+export async function loginProduction(username: string, password: string): Promise<DemoLoginResponse> {
+  const result = await requestJson<{actor: ActorSummary; csrf_token: string}>("/api/v1/auth/login", {
+    method: "POST", body: JSON.stringify({username, password}),
+  });
+  csrfNonce = result.csrf_token;
+  // The session credential is HttpOnly; this empty value is only a legacy UI adapter.
+  const actor = await requestJson<ActorSummary>("/api/v1/me");
+  if (actor.actor_id !== result.actor.actor_id || actor.role !== result.actor.role) throw new ApiError(401,"Session identity could not be verified.");
+  return {session_id: "", actor};
+}
+export function forgetProductionCsrf() { csrfNonce = ""; }
+
+const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL ?? "").replace(/\/$/, "");
 
 async function requestJson<T>(
   path: string,
@@ -395,22 +410,16 @@ async function requestJson<T>(
   if (options.body) {
     headers.set("Content-Type", "application/json");
   }
-  if (sessionId) {
+  if (sessionId && !productionMode) {
     headers.set("Authorization", `Bearer ${sessionId}`);
   }
-  const method = (options.method ?? "GET").toUpperCase();
-  if (["POST", "PUT", "PATCH", "DELETE"].includes(method)) {
-    const csrfToken = csrfTokenMemory ?? readableCookie("resolveai_csrf");
-    if (csrfToken) headers.set("X-CSRF-Token", csrfToken);
-  }
 
+  if (productionMode && csrfNonce && !["GET", "HEAD", "OPTIONS"].includes((options.method ?? "GET").toUpperCase())) {
+    headers.set("X-CSRF-Token", csrfNonce);
+  }
   let response: Response;
   try {
-    response = await fetch(`${apiBaseUrl}${path}`, {
-      ...options,
-      credentials: "include",
-      headers,
-    });
+    response = await fetch(`${apiBaseUrl}${path}`, { ...options, headers, credentials: productionMode ? "include" : "omit" });
   } catch {
     throw new ApiError(0, "The local API could not be reached.", "network_error");
   }
@@ -419,6 +428,7 @@ async function requestJson<T>(
   if (!response.ok) {
     const envelope = (payload ?? {}) as ErrorEnvelope;
     const error = envelope.error;
+    notifyProductionSessionExpired(path, response.status, error?.code);
     throw new ApiError(
       response.status,
       error?.message ?? `The request failed with status ${response.status}.`,
@@ -435,20 +445,6 @@ export function loginDemoCustomer(): Promise<DemoLoginResponse> {
     method: "POST",
     body: JSON.stringify({ demo_actor_id: "customer_001" }),
   });
-}
-
-export function loginProduction(username: string, password: string): Promise<ProductionLoginResponse> {
-  return requestJson<ProductionLoginResponse>("/api/v1/auth/login", {
-    method: "POST",
-    body: JSON.stringify({ username, password }),
-  }).then((response) => {
-    csrfTokenMemory = response.csrf_token;
-    return response;
-  });
-}
-
-export function getCurrentActor(): Promise<ActorSummary> {
-  return requestJson<ActorSummary>("/api/v1/me");
 }
 
 export function loginDemoSupport(): Promise<DemoLoginResponse> {
@@ -473,11 +469,15 @@ export function loginDemoMerchantAdmin(): Promise<DemoLoginResponse> {
 }
 
 export function logoutSession(sessionId: string): Promise<void> {
-  return requestJson<void>("/api/v1/auth/logout", { method: "POST" }, sessionId).then(() => {
-    csrfTokenMemory = null;
-  });
+  return requestJson<void>("/api/v1/auth/logout", { method: "POST" }, sessionId);
 }
 
+export function getCaseOrder(sessionId: string, conversationId: string): Promise<OrderSummary> {
+  return requestJson<OrderSummary>(`/api/v1/support/conversations/${encodeURIComponent(conversationId)}/order`, {}, sessionId);
+}
+export function getWorkspacePolicyAudit(sessionId: string): Promise<KnowledgePolicyAuditResponse> {
+  return requestJson<BackendPolicyAuditResponse>("/api/v1/workspace/policy-audit?limit=100", {}, sessionId).then(raw=>({events:raw.events.map(mapPolicyAudit)}));
+}
 export function getOrderSummary(sessionId: string, orderId: string): Promise<OrderSummary> {
   return requestJson<OrderSummary>(
     `/api/v1/orders/${encodeURIComponent(orderId)}`,

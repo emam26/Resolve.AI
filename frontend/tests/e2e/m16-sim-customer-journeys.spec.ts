@@ -254,28 +254,32 @@ test("customer-only, staff, and approver journeys keep role surfaces separated",
   await page.goto("/?surface=widget");
   await expect(page.getByRole("button", { name: "Start Demo Customer session" })).toBeVisible();
   await expect(page.getByRole("navigation", { name: "Application surfaces" })).toHaveCount(0);
-  await expect(page.getByRole("region", { name: "Support inbox" })).toHaveCount(0);
-  await expect(page.getByRole("region", { name: "Refund review" })).toHaveCount(0);
+  await expect(page.locator('section[aria-labelledby="staff-title"]')).toHaveCount(0);
+  await expect(page.locator('section[aria-labelledby="refund-title"]')).toHaveCount(0);
 
-  await page.goto("/");
+  await page.goto("/?surface=support");
   const staff = page.locator('section[aria-labelledby="staff-title"]');
   const approval = page.locator('section[aria-labelledby="refund-title"]');
+  await page.getByRole("navigation", {name:"Application surfaces"}).getByRole("button", {name:/^Conversations/}).click();
   await staff.getByRole("button", { name: "Start Demo Support session" }).click();
   await expect(staff).toContainText("support_001 · support_agent");
   await expect(staff.getByRole("button", { name: "Approve for external action" })).toHaveCount(0);
 
+  await page.getByRole("navigation", {name:"Application surfaces"}).getByRole("button", {name:/^Refund approvals/}).click();
   await approval.getByRole("button", { name: "Start Demo Approver session" }).click();
   await expect(approval).toContainText("refund_approver_001 · refund_approver");
   await expect(approval.getByText("APPROVED_EXTERNAL_ACTION_REQUIRED", { exact: true })).toHaveCount(0);
+  await page.getByRole("navigation", {name:"Application surfaces"}).getByRole("button", {name:/^Conversations/}).click();
   await expect(staff.getByRole("button", { name: "Approve for external action" })).toHaveCount(0);
 });
 
 test("a failed refund request can retry with the same idempotency key and close once", async ({ page }) => {
   const api = await installJourneyApi(page, { failRefundOnce: true });
-  await page.goto("/");
+  await page.goto("/?surface=support");
 
   const staff = page.locator('section[aria-labelledby="staff-title"]');
   const approval = page.locator('section[aria-labelledby="refund-title"]');
+  await page.getByRole("navigation", {name:"Application surfaces"}).getByRole("button", {name:/^Conversations/}).click();
   await staff.getByRole("button", { name: "Start Demo Support session" }).click();
   await staff.getByRole("button", { name: /conv_sim_001/ }).click();
   await staff.getByRole("button", { name: "Claim conversation" }).click();
@@ -289,8 +293,9 @@ test("a failed refund request can retry with the same idempotency key and close 
   expect(api.refundRequestKeys).toHaveLength(2);
   expect(api.refundRequestKeys[0]).toBe(api.refundRequestKeys[1]);
 
+  await page.getByRole("navigation", {name:"Application surfaces"}).getByRole("button", {name:/^Refund approvals/}).click();
   await approval.getByRole("button", { name: "Start Demo Approver session" }).click();
-  await expect(approval.getByText("refund_sim_001", { exact: true })).toBeVisible();
+  await expect(approval.locator(".refund-card").getByText("refund_sim_001", { exact: true })).toBeVisible();
   await approval.getByRole("button", { name: "Approve for external action" }).click();
   const refundCard = approval.locator(".refund-card").filter({ hasText: "refund_sim_001" });
   await expect(refundCard).toContainText("APPROVED_EXTERNAL_ACTION_REQUIRED");

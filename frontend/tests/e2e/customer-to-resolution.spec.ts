@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 
 test("customer-to-resolution workflow preserves human and refund boundaries", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("/?surface=widget-preview");
 
   const widget = page.locator('section[aria-labelledby="widget-title"]');
   const staff = page.locator('section[aria-labelledby="staff-title"]');
@@ -31,6 +31,7 @@ test("customer-to-resolution workflow preserves human and refund boundaries", as
   await widget.getByRole("button", { name: "Request human support" }).click();
   await expect(widget.getByText("Human support requested", { exact: true })).toBeVisible();
 
+  await page.getByRole("navigation", {name:"Application surfaces"}).getByRole("button", {name:"Conversations",exact:true}).click();
   await staff.getByRole("button", { name: /Start Demo Support session/ }).click();
   await expect(staff.getByRole("button", { name: new RegExp(conversationId as string) })).toBeVisible();
   await staff.getByRole("button", { name: new RegExp(conversationId as string) }).click();
@@ -48,13 +49,16 @@ test("customer-to-resolution workflow preserves human and refund boundaries", as
   const refundId = (await refundNotice.innerText()).match(/refund_[a-f0-9]+/)?.[0];
   expect(refundId).toBeTruthy();
 
+  await page.getByRole("navigation", {name:"Application surfaces"}).getByRole("button", {name:/^Refund approvals/}).click();
   await approval.getByRole("button", { name: /Start Demo Approver session/ }).click();
-  await expect(approval.getByText(refundId as string, { exact: true })).toBeVisible();
+  await approval.getByRole("button", { name: new RegExp(refundId as string) }).click();
+  await expect(approval.locator(".refund-card")).toContainText(refundId as string);
   await approval.getByRole("button", { name: "Approve for external action" }).click();
   const refundCard = approval.locator(".refund-card").filter({ hasText: refundId as string });
   await expect(refundCard.getByText("APPROVED_EXTERNAL_ACTION_REQUIRED", { exact: true })).toBeVisible();
   await expect(refundCard.getByText(/no payment operation was performed/, { exact: false })).toBeVisible();
 
+  await page.getByRole("navigation", {name:"Application surfaces"}).getByRole("button", {name:/^Conversations/}).click();
   await staff.getByRole("button", { name: "Resolve" }).click();
   await expect(staff.getByText("Conversation resolved", { exact: true })).toBeVisible();
   await expect(staff.locator("#staff-message")).toHaveCount(0);
@@ -70,7 +74,7 @@ test("customer login shows a safe API failure and keeps controls labeled", async
       }),
     });
   });
-  await page.goto("/");
+  await page.goto("/?surface=widget-preview");
 
   const widget = page.locator('section[aria-labelledby="widget-title"]');
   await expect(widget.locator("#order-id")).toHaveCount(0);
@@ -86,7 +90,7 @@ test("customer logout revokes the server session without persistent browser stor
     await route.continue();
   });
 
-  await page.goto("/");
+  await page.goto("/?surface=widget-preview");
   const widget = page.locator('section[aria-labelledby="widget-title"]');
   await widget.getByRole("button", { name: /Start Demo Customer session/ }).click();
   await expect(widget.getByRole("button", { name: "End session" })).toBeVisible();

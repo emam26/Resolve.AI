@@ -1,3 +1,4 @@
+import { Icon, PageHeading, type Surface } from "./DesignShell";
 import { FormEvent, useEffect, useState } from "react";
 import {
   ApiError,
@@ -25,7 +26,7 @@ import {
   WorkspaceTeamMember,
 } from "./api";
 
-export type WorkspaceSurfaceName = "overview" | "knowledge" | "team";
+export type WorkspaceSurfaceName = "overview" | "knowledge" | "team" | "settings";
 
 interface WorkspaceSurfaceProps {
   activeSurface: WorkspaceSurfaceName;
@@ -34,6 +35,7 @@ interface WorkspaceSurfaceProps {
   onStartSession: () => void;
   onLogout: () => void;
   isLoggingOut: boolean;
+  navigate: (surface: Surface) => void;
 }
 
 type ViewError = {
@@ -61,10 +63,6 @@ function formatDate(value: string | null): string {
   return Number.isNaN(date.valueOf())
     ? value
     : new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(date);
-}
-
-function numberFormat(value: number): string {
-  return new Intl.NumberFormat().format(value);
 }
 
 function WorkspaceLogin({ isStarting, onStartSession }: Pick<WorkspaceSurfaceProps, "isStarting" | "onStartSession">) {
@@ -97,18 +95,9 @@ function ViewNotice({ error }: { error: ViewError }) {
   );
 }
 
-function MetricCard({ label, value, detail }: { label: string; value: number; detail: string }) {
-  return (
-    <article className="metric-card">
-      <span className="section-label">{label}</span>
-      <strong>{numberFormat(value)}</strong>
-      <span>{detail}</span>
-    </article>
-  );
-}
-
-function OverviewView({ sessionId }: { sessionId: string }) {
+function OverviewView({ sessionId, navigate, name }: { sessionId: string; navigate: (s:Surface)=>void; name:string }) {
   const [summary, setSummary] = useState<OpsSummary | null>(null);
+  const [published,setPublished]=useState<number|null>(null);
   const [error, setError] = useState<ViewError | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -117,6 +106,7 @@ function OverviewView({ sessionId }: { sessionId: string }) {
     setError(null);
     try {
       setSummary(await getOpsSummary(sessionId));
+      try {setPublished((await getKnowledgePolicies(sessionId,{query:"",status:"published"})).total);} catch {setPublished(null);}
     } catch (requestError) {
       setSummary(null);
       setError(errorFrom(requestError));
@@ -127,46 +117,8 @@ function OverviewView({ sessionId }: { sessionId: string }) {
 
   useEffect(() => { void load(); }, [sessionId]);
 
-  return (
-    <section className="workspace-view" aria-labelledby="overview-title">
-      <div className="workspace-view-heading">
-        <div>
-          <p className="eyebrow accent">Operations overview</p>
-          <h2 id="overview-title">A clear view of today’s support work.</h2>
-          <p className="muted">Metrics are read from the authorized local workspace API; this surface never invents demo counts.</p>
-        </div>
-        <button className="secondary-button" type="button" onClick={() => void load()} disabled={loading}>
-          {loading ? "Refreshing…" : "Refresh overview"}
-        </button>
-      </div>
-      {error && <ViewNotice error={error} />}
-      {loading && !summary ? (
-        <div className="workspace-empty-state" role="status"><strong>Loading overview…</strong><span>Checking current workspace activity.</span></div>
-      ) : summary ? (
-        <>
-          <div className="metric-grid">
-            <MetricCard label="Total conversations" value={summary.total_conversations} detail="All local records" />
-            <MetricCard label="Active conversations" value={summary.active_conversations} detail="Currently in progress" />
-            <MetricCard label="Waiting for human" value={summary.waiting_for_human} detail="Queued handoffs" />
-            <MetricCard label="Resolved" value={summary.resolved_conversations} detail="Closed conversations" />
-            <MetricCard label="Refund reviews" value={summary.pending_refund_reviews} detail="Pending approval" />
-          </div>
-          <section className="activity-card" aria-labelledby="activity-title">
-            <div className="workspace-section-heading"><div><p className="section-label">Recent activity</p><h3 id="activity-title">Support timeline</h3></div></div>
-            {summary.recent_activity.length === 0 ? (
-              <div className="workspace-empty-state compact"><strong>No recent activity</strong><span>The API has not returned any activity records.</span></div>
-            ) : (
-              <ol className="activity-list">
-                {summary.recent_activity.map((item) => (
-                  <li key={item.activity_id}><span className="activity-dot" aria-hidden="true" /><div><strong>{item.label}</strong><span>{item.kind}{item.conversation_id ? ` · ${item.conversation_id}` : ""}</span></div><time dateTime={item.occurred_at ?? undefined}>{formatDate(item.occurred_at)}</time></li>
-                ))}
-              </ol>
-            )}
-          </section>
-        </>
-      ) : null}
-    </section>
-  );
+  return <section className="workspace-view" aria-label="Operations overview"><PageHeading title={`Welcome, ${name}.`} subtitle="See what needs attention across support, knowledge, and your store connection." actions={<><button className="btn" onClick={()=>navigate('support')}><Icon name="inbox"/> Open inbox</button><button className="btn primary" onClick={()=>navigate('playground')}><Icon name="flask"/> Test AI</button></>}/><div className="flag warning"><Icon name="info"/><span><b>Local synthetic pilot.</b> No live Shopify, payment or qualified hosted model connection is asserted.</span></div><div className="pilot-banner"><div><div className="eyebrow" style={{color:'#64dfc4'}}>MERCHANT PILOT</div><h2>One connected workflow. Real evidence. Human control.</h2><p>Connect your store, publish trusted policies, answer customers, and resolve escalations—with refund execution remaining in your own system.</p></div><button className="btn primary" onClick={()=>navigate('onboarding')}><Icon name="arrow"/> Finish setup</button></div>{error&&<ViewNotice error={error}/>}<div className="grid g4" style={{marginBottom:17}}>{[['Active conversations',summary?.active_conversations,'Currently in progress','chat'],['Handoffs queued',summary?.waiting_for_human,'Awaiting an assigned agent','headset'],['Refunds awaiting review',summary?.pending_refund_reviews,'No payment action taken','shield'],['Published policy sources',published,'Published catalog entries','book']].map(([label,value,note,ico])=><div className="card metric" key={label}><div className="metric-name">{label}</div><div className="metric-icon"><Icon name={String(ico)}/></div><div className="metric-value">{value??'—'}</div><div className="metric-foot">{note}</div></div>)}</div><div className="grid g73"><section className="card pad"><div className="section-head"><div><div className="section-title">Support activity</div><div className="section-sub">Current authorized snapshot · weekly series unavailable</div></div><button className="btn sm" onClick={()=>void load()} disabled={loading}>{loading?'Refreshing…':'Refresh overview'}</button></div><div className="snapshot-chart">{[['Active',summary?.active_conversations],['Waiting for human',summary?.waiting_for_human],['Resolved',summary?.resolved_conversations]].map(([label,count])=><div key={label}><span>{label}</span><div className="progress-track"><span style={{width:`${summary&&typeof count==='number'?Math.min(100,count/Math.max(1,summary.total_conversations)*100):0}%`}}/></div><b>{count??'—'}</b></div>)}</div><p className="helper">Total conversations: {summary?.total_conversations??'—'}</p></section><section className="card pad"><div className="section-title">Needs your attention</div><div className="section-sub">Queues connected to the core workflow</div><div className="stack" style={{marginTop:18}}>{[['inbox',`${summary?.waiting_for_human??'—'} human handoffs`,'Customer waiting for an agent','support','Open'],['shield',`${summary?.pending_refund_reviews??'—'} pending refund reviews`,'Decision and execution remain separate','refunds','Review'],['book','Policy management','Index, test and publish','knowledge','Manage']].map(([icon,title,sub,route,button])=><div className="info-card" key={route}><div className="tile-icon"><Icon name={icon}/></div><div style={{flex:1}}><strong>{title}</strong><p>{sub}</p></div><button className="btn sm" onClick={()=>navigate(route as Surface)}>{button}</button></div>)}</div></section></div><div className="grid g73" style={{marginTop:17}}><section className="card pad"><div className="section-head"><div><div className="section-title">Recent customer conversations</div><div className="section-sub">Activity returned by the authorized workspace API</div></div><button className="link" onClick={()=>navigate('support')}>View inbox →</button></div><div className="tablewrap"><table className="table"><thead><tr><th>Conversation</th><th>Activity</th><th>Time</th></tr></thead><tbody>{summary?.recent_activity.map(item=><tr key={item.activity_id}><td className="maincell">{item.label}</td><td>{item.kind}</td><td>{formatDate(item.occurred_at)}</td></tr>)}</tbody></table></div>{!summary?.recent_activity.length&&<p className="helper">{loading?'Loading overview…':'No recent activity returned.'}</p>}</section><section className="card pad"><div className="section-title">Pilot readiness</div><div className="section-sub">Backend gates, not decorative checkmarks</div>{[['Shopify access','Not connected'],['Published knowledge',published===null?'Not verified':`${published} catalog entries`],['Staff permissions','Local authenticated demo session'],['Widget installation','Local preview only']].map(([label,sub],i)=><div className="checkline" key={label}><div className={`checkball ${i===1&&published!==null?'':'wait'}`}><Icon name={i===1&&published!==null?'check':'clock'}/></div><div className="desc"><strong>{label}</strong><span>{sub}</span></div></div>)}</section></div></section>;
+
 }
 
 type PolicyEditorState = {
@@ -386,7 +338,7 @@ function KnowledgeView({ sessionId, canEdit }: { sessionId: string; canEdit: boo
   return (
     <section className="workspace-view" aria-labelledby="knowledge-title">
       <div className="workspace-view-heading">
-        <div><p className="eyebrow accent">Knowledge management</p><h2 id="knowledge-title">Maintain policy evidence safely.</h2><p className="muted">Drafts are versioned and server-authorized. Publishing and rollback carry the revision observed by this session.</p></div>
+        <div><p className="eyebrow accent">Knowledge management</p><h2 id="knowledge-title">Knowledge base</h2><p className="muted">Drafts are versioned and server-authorized. Publishing and rollback carry the revision observed by this session.</p></div>
         {canEdit && <button className="primary-button" type="button" onClick={startDraft}>Create draft</button>}
       </div>
       {error && <ViewNotice error={error} />}
@@ -395,11 +347,11 @@ function KnowledgeView({ sessionId, canEdit }: { sessionId: string; canEdit: boo
         <label htmlFor="policy-status">Status<select id="policy-status" value={status} onChange={(event) => { setStatus(event.target.value); void loadPolicies(query, event.target.value); }}><option value="all">All statuses</option><option value="published">Published</option><option value="draft">Draft</option><option value="unpublished">Unpublished</option></select></label>
         <button className="primary-button" type="submit" disabled={loading}>{loading ? "Searching…" : "Search catalog"}</button>
       </form>
-      <div className="knowledge-layout">
-        <div className="policy-list" aria-label="Policy catalog">
+      <div className="grid g3 knowledge-metrics">{[["Published sources",policies.filter(p=>p.status==='published').length],["Draft / review",policies.filter(p=>['draft','indexing','testable'].includes(p.status)).length],["Other versions",policies.filter(p=>!['published','draft','indexing','testable'].includes(p.status)).length]].map(([label,value])=><div className="card metric" key={label}><div className="metric-name">{label}</div><div className="metric-value">{loading||error?'—':value}</div><div className="metric-foot">Current filtered catalog</div></div>)}</div><div className="knowledge-layout">
+        <div className="policy-list card pad" aria-label="Policy catalog"><div className="section-title">Policy documents</div><div className="section-sub">Published releases and isolated drafts</div>
           {loading && policies.length === 0 ? <div className="workspace-empty-state"><strong>Loading policies…</strong><span>Reading the authorized knowledge catalog.</span></div> : policies.length === 0 ? <div className="workspace-empty-state"><strong>No policies found</strong><span>Try a different search or status filter.</span></div> : policies.map((policy) => <button className={`policy-list-item ${selected?.document_id === policy.document_id && selected.document_version === policy.document_version ? "selected" : ""}`} type="button" key={`${policy.document_id}-${policy.document_version}`} onClick={() => void openPolicy(policy)}><span><strong>{policy.title}</strong><small>{policy.document_id} · {policy.document_version}</small></span><span className="policy-meta"><b>{policy.status}</b><small>{policy.section_count} sections</small></span></button>)}
         </div>
-        <article className="policy-detail" aria-live="polite">
+        <article className="policy-detail card pad" aria-live="polite">
           {detailLoading ? <div className="workspace-empty-state"><strong>Loading policy detail…</strong><span>Checking the selected version.</span></div> : selected ? <>
             <div className="policy-detail-heading"><div><p className="section-label">{selected.document_id} · {selected.document_version}</p><h3>{selected.title}</h3></div><span className="state-badge">{selected.status}</span></div>
             <dl className="policy-facts"><div><dt>Visibility</dt><dd>{selected.visibility}</dd></div><div><dt>Release</dt><dd>{selected.release_id ?? "Not provided"}</dd></div><div><dt>Revision</dt><dd>{selected.revision ?? "Unknown"}</dd></div><div><dt>Index</dt><dd>{selected.index_state ?? "Not provided"}</dd></div></dl>
@@ -416,7 +368,7 @@ function KnowledgeView({ sessionId, canEdit }: { sessionId: string; canEdit: boo
         <form className="policy-editor-card" onSubmit={(event) => { event.preventDefault(); void applyMutation(isCreatingDraft ? "create" : "save"); }}>
           <div className="workspace-section-heading"><div><p className="section-label">{isCreatingDraft ? "New draft" : "Draft editor"}</p><h3>{isCreatingDraft ? "Create a versioned policy draft" : "Edit draft content"}</h3><p className="muted">The server rechecks role, revision, validation, and publication state.</p></div><span className="staff-demo-pill">Admin action</span></div>
           <div className="policy-editor-meta"><label>Document ID<input value={editor.document_id} onChange={(event) => updateEditor("document_id", event.target.value)} disabled={!isCreatingDraft} required /></label><label>Title<input value={editor.title} onChange={(event) => updateEditor("title", event.target.value)} required /></label><label>Version <span>(optional)</span><input value={editor.document_version} onChange={(event) => updateEditor("document_version", event.target.value)} disabled={!isCreatingDraft} placeholder="v1" /></label><label>Release ID<input value={editor.release_id} onChange={(event) => updateEditor("release_id", event.target.value)} required /></label><label>Visibility<select value={editor.visibility} onChange={(event) => updateEditor("visibility", event.target.value as PolicyEditorState["visibility"])}><option value="public">Public customer evidence</option><option value="internal">Internal staff evidence</option></select></label></div>
-          <div className="policy-editor-sections"><div className="workspace-section-heading"><h4>Sections</h4><button className="secondary-button compact-button" type="button" onClick={addSection}>Add section</button></div>{editor.sections.map((section, index) => <fieldset key={`${index}-${section.section}`}><legend>Section {index + 1}</legend><label>Heading<input value={section.section} onChange={(event) => updateSection(index, "section", event.target.value)} required /></label><label>Content<textarea value={section.content} onChange={(event) => updateSection(index, "content", event.target.value)} rows={4} required /></label>{editor.sections.length > 1 && <button className="text-button" type="button" onClick={() => removeSection(index)}>Remove section</button>}</fieldset>)}</div>
+          <div className="policy-editor-sections"><div className="workspace-section-heading"><h4>Sections</h4><button className="secondary-button compact-button" type="button" onClick={addSection}>Add section</button></div>{editor.sections.map((section, index) => <fieldset key={index}><legend>Section {index + 1}</legend><label>Heading<input value={section.section} onChange={(event) => updateSection(index, "section", event.target.value)} required /></label><label>Content<textarea value={section.content} onChange={(event) => updateSection(index, "content", event.target.value)} rows={4} required /></label>{editor.sections.length > 1 && <button className="text-button" type="button" onClick={() => removeSection(index)}>Remove section</button>}</fieldset>)}</div>
           <div className="policy-editor-actions"><button className="secondary-button" type="button" onClick={() => { setIsCreatingDraft(false); if (selected) setEditor(editorFromPolicy(selected)); }}>Cancel</button><button className="primary-button" type="submit" disabled={mutationAction !== null}>{mutationAction === "create" ? "Creating draft…" : mutationAction === "save" ? "Saving draft…" : isCreatingDraft ? "Create draft" : "Save changes"}</button></div>
         </form>
       )}
@@ -424,7 +376,7 @@ function KnowledgeView({ sessionId, canEdit }: { sessionId: string; canEdit: boo
   );
 }
 
-function TeamView({ sessionId }: { sessionId: string }) {
+function TeamView({ sessionId, surface }: { sessionId: string; surface: "team"|"settings" }) {
   const [members, setMembers] = useState<WorkspaceTeamMember[]>([]);
   const [settings, setSettings] = useState<WorkspaceSettings | null>(null);
   const [error, setError] = useState<ViewError | null>(null);
@@ -450,15 +402,15 @@ function TeamView({ sessionId }: { sessionId: string }) {
 
   return (
     <section className="workspace-view" aria-labelledby="team-title">
-      <div className="workspace-view-heading"><div><p className="eyebrow accent">Team and settings</p><h2 id="team-title">Know who can act, and where.</h2><p className="muted">Role grants and workspace settings are displayed from the authorized API. This view does not offer unsupported mutations.</p></div><button className="secondary-button" type="button" onClick={() => void load()} disabled={loading}>{loading ? "Refreshing…" : "Refresh workspace"}</button></div>
+      <div className="workspace-view-heading"><div><p className="eyebrow accent">Team and settings</p><h2 id="team-title">{surface==='team'?'Team & access':'Workspace settings'}</h2><p className="muted">Role grants and workspace settings are displayed from the authorized API. This view does not offer unsupported mutations.</p></div><button className="secondary-button" type="button" onClick={() => void load()} disabled={loading}>{loading ? "Refreshing…" : "Refresh workspace"}</button></div>
       {error && <ViewNotice error={error} />}
-      {loading && !settings ? <div className="workspace-empty-state" role="status"><strong>Loading workspace…</strong><span>Checking team grants and settings.</span></div> : settings ? <div className="team-layout"><section className="activity-card" aria-labelledby="settings-title"><div className="workspace-section-heading"><div><p className="section-label">Workspace settings</p><h3 id="settings-title">{settings.merchant_name}</h3></div><span className="state-badge">{settings.environment}</span></div><dl className="settings-list"><div><dt>Retrieval</dt><dd>{settings.retrieval_mode}</dd></div><div><dt>Generation</dt><dd>{settings.generation_mode}</dd></div><div><dt>Data mode</dt><dd>{settings.synthetic_data ? "Synthetic local records" : "Not marked synthetic"}</dd></div></dl></section><section className="activity-card" aria-labelledby="team-members-title"><div className="workspace-section-heading"><div><p className="section-label">Access</p><h3 id="team-members-title">Team members</h3></div></div>{members.length === 0 ? <div className="workspace-empty-state compact"><strong>No team members returned</strong><span>The API returned an empty team.</span></div> : <ul className="team-list">{members.map((member) => <li key={member.actor_id}><span className="avatar">{member.display_name.slice(0, 2).toUpperCase()}</span><div><strong>{member.display_name}</strong><span>{member.actor_id} · {member.role}</span></div><span className="team-status">{member.status}</span><small>{member.permissions.join(" · ") || "No permissions returned"}</small></li>)}</ul>}</section></div> : null}
+      {loading && !settings ? <div className="workspace-empty-state" role="status"><strong>Loading workspace…</strong><span>Checking team grants and settings.</span></div> : settings ? surface==='team'?<section className="card pad"><div className="section-head"><div><div className="section-title">Staff role model</div><div className="section-sub">Actual grants from the authorized workspace API</div></div><span className="badge blue">LOCAL DEMO</span></div><div className="tablewrap"><table className="table"><thead><tr><th>Member</th><th>Actor ID</th><th>Role</th><th>Permissions</th></tr></thead><tbody>{members.map(member=><tr key={member.actor_id}><td className="maincell">{member.display_name}</td><td>{member.actor_id}</td><td>{member.role}</td><td style={{whiteSpace:'normal'}}>{member.permissions.join(' · ')||'None returned'}</td></tr>)}</tbody></table></div>{members.length===0&&<p className="helper">No team members returned.</p>}<div className="flag soft" style={{marginTop:18}}><Icon name="lock"/> Roles are server-controlled. No user provisioning or permission changes are available here.</div></section>:<div className="grid g64"><section className="card pad"><div className="section-title">Workspace profile</div><div className="section-sub">Read-only configuration from the server</div><div className="grid g2" style={{marginTop:18}}>{[['Workspace',settings.merchant_name],['Environment',settings.environment],['Retrieval',settings.retrieval_mode],['Generation',settings.generation_mode],['Data mode',settings.synthetic_data?'Synthetic local records':'Not marked synthetic']].map(([label,value])=><label className="field" key={label}>{label}<input className="input" value={value} readOnly/></label>)}</div></section><section className="card pad"><div className="section-title">Non-configurable security boundaries</div><div className="section-sub">Required backend safeguards, not user toggles</div>{['Customer and staff authorization','Order ownership checks','Separate human refund approval','No autonomous refund writes','Internal policy isolation'].map(label=><div className="kv" key={label}><span className="key">{label}</span><span className="badge gray">REQUIRED</span></div>)}<div className="notice-inline"><Icon name="lock"/> These are release requirements, not fresh security test results.</div></section></div>:null}
     </section>
   );
 }
 
 export default function WorkspaceSurface(props: WorkspaceSurfaceProps) {
-  if (!props.session) return <WorkspaceLogin isStarting={props.isStarting} onStartSession={props.onStartSession} />;
+  if (!props.session) return <><PageHeading title={{overview:"Overview",knowledge:"Knowledge base",team:"Team & access",settings:"Workspace settings"}[props.activeSurface]} subtitle="Establish a local demo session to view authorized workspace records."/><WorkspaceLogin isStarting={props.isStarting} onStartSession={props.onStartSession} /></>;
   const sessionId = props.session.session_id;
   return (
     <>
@@ -468,9 +420,9 @@ export default function WorkspaceSurface(props: WorkspaceSurfaceProps) {
           {props.isLoggingOut ? "Ending..." : "End session"}
         </button>
       </div>
-      {props.activeSurface === "overview" && <OverviewView sessionId={sessionId} />}
+      {props.activeSurface === "overview" && <OverviewView sessionId={sessionId} navigate={props.navigate} name={props.session.actor.display_name} />}
       {props.activeSurface === "knowledge" && <KnowledgeView sessionId={sessionId} canEdit={props.session.actor.role === "merchant_admin"} />}
-      {props.activeSurface === "team" && <TeamView sessionId={sessionId} />}
+      {(props.activeSurface === "team" || props.activeSurface === "settings") && <TeamView sessionId={sessionId} surface={props.activeSurface} />}
     </>
   );
 }

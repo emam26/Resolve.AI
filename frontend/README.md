@@ -1,49 +1,36 @@
-# ResolveAI local frontend
+# ResolveAI — reference-driven frontend reconstruction (integration candidate)
 
-This directory contains the React/TypeScript/Vite frontend for the synthetic ResolveAI customer widget, support inbox, refund-approval console, operations overview, read-only policy catalog, and admin team/settings view. It talks to the FastAPI service through the JSON API; authorization and workflow state remain server-controlled.
+This React/TypeScript/Vite source replaces the previous combined support page with the merchant-console layout from `ResolveAI_UI_Redesign_v2.html`. The original dependencies are retained. The API client now integrates the supplied M21 provisioned-account contract and narrow staff case-order / policy-audit endpoints. This remains an integration candidate, not a verified production or payment release.
 
-## Local development
+## Local run (Windows)
 
-Install the locked dependencies and start Vite:
+From the repository root, start the existing backend using its documented environment. In a second PowerShell:
 
 ```powershell
-npm ci
-$env:VITE_API_BASE_URL = "http://127.0.0.1:8000"
-npm run dev -- --host 127.0.0.1 --port 5173
+cd F:\ResolveAI\frontend
+npm.cmd ci
+npm.cmd run typecheck
+npm.cmd run build
+npm.cmd run dev -- --host 127.0.0.1 --port 5173
 ```
 
-The Vite development server proxies `/api` to `http://127.0.0.1:8000` by default, so `VITE_API_BASE_URL` can be omitted for the documented two-process setup. Set it when the API uses a different address. See the repository [README](../README.md) for backend setup, synthetic workflow steps, and limitations.
+Open `http://127.0.0.1:5173/` (overview). The Vite `/api` proxy defaults to `http://127.0.0.1:8000`; an alternative API origin can be set through `VITE_API_BASE_URL`.
 
-The staff workspace is available at `http://127.0.0.1:5173/?surface=overview`, `?surface=knowledge`, or `?surface=team`. The customer-only embed preview is `http://127.0.0.1:5173/?surface=widget`; it does not expose staff or refund controls.
+Local demo roles are established through the existing backend endpoints. Navigation exposes separate pages, not a client-side permission grant. Staff inbox is `?surface=support`, approver queue `?surface=refunds`, merchant storefront preview `?surface=widget-preview`, and isolated customer-only widget `?surface=widget`. The remaining routes are `overview`, `tickets`, `orders`, `knowledge`, `playground`, `evaluations`, `onboarding`, `integrations`, `team`, `audit`, and `settings`.
 
-## Checks
-
-```powershell
-npm run typecheck
-npm run build
-```
-
-## Browser checks
-
-The repository includes deterministic Playwright coverage for the synthetic
-customer-to-resolution workflow, staff workspace surfaces, widget isolation,
-and safe API-failure states:
+## Verification
 
 ```powershell
-npm run test:e2e -- --list
-npm run test:e2e
-```
-
-The tests start or reuse the local FastAPI and Vite processes and use SQLite
-with lexical retrieval. Browser binaries are not downloaded by this
-repository. In environments without the pinned Playwright browser, an
-installed system Chromium/Chrome/Edge executable can be selected explicitly:
-
-```powershell
+npm.cmd run typecheck
+npm.cmd run build
 $env:RESOLVEAI_PLAYWRIGHT_EXECUTABLE = "C:\Program Files\Google\Chrome\Application\chrome.exe"
-npm run test:e2e
+npm.cmd run test:e2e
 ```
 
-The local M13 verification ran all eight tests with the system Chrome path.
+The existing E2E tests were updated for separate page navigation; they have not passed against the real backend in this handoff. Browser fixture screenshots are not end-to-end verification. No production auth, hosted model qualification, or deployment claim is made.
 
-The UI uses explicitly labelled demo identities and synthetic records. It does not connect to a live customer, commerce, payment, or model provider.
+## Authentication modes and current integration gaps
+
+Use `VITE_AUTH_MODE=demo` for the local synthetic walkthrough. For provisioned account testing, use `VITE_AUTH_MODE=production` and the backend M21 account settings with demo authentication disabled. Production-mode requests send credentials, retain the returned CSRF nonce in memory, and check `/me`; the browser never receives an API session bearer in this mode. Reload requires signing in again. Hosted cookie behavior must be verified independently.
+
+The support ticket page is a case follow-up view, the order page uses case-linked lookups, and audit history reads policy audit events. The playground inspects published catalog records; it is not a runtime retrieval test. Dedicated ticket/SLA storage, unrestricted order directory, full case evidence, live AI evaluation results, Shopify authorization, unified audit, account management and settings writes remain unavailable. See `../docs/UI_INTEGRATION_HANDOFF.md` for contracts, changed files, current verification and remaining release gates.

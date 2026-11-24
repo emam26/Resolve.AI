@@ -88,10 +88,10 @@ test("workspace overview and knowledge catalog use authorized API data", async (
   await installWorkspaceApi(page);
   await page.goto("/?surface=overview");
   await page.getByRole("button", { name: "Start Demo Workspace session" }).click();
-  await expect(page.getByRole("heading", { name: /clear view of today/ })).toBeVisible();
-  await expect(page.getByText("Total conversations").locator("..").getByText("4", { exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "Knowledge" }).click();
-  await expect(page.getByRole("heading", { name: "Maintain policy evidence safely." })).toBeVisible();
+  await expect(page.getByRole("heading", { name: /Welcome,/ })).toBeVisible();
+  await expect(page.getByText("Total conversations: 4", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Knowledge base" }).click();
+  await expect(page.getByRole("heading", { name: "Knowledge base" })).toBeVisible();
   await expect(page.getByText("delivery-policy · v2", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: /delivery-policy.*v2/ }).click();
   await expect(page.getByRole("heading", { name: "delivery-policy" })).toBeVisible();
@@ -102,16 +102,16 @@ test("widget-only mode does not expose staff surfaces", async ({ page }) => {
   await page.goto("/?surface=widget");
   await expect(page.getByRole("button", { name: "Start Demo Customer session" })).toBeVisible();
   await expect(page.getByRole("navigation", { name: "Application surfaces" })).toHaveCount(0);
-  await expect(page.getByRole("region", { name: "Support inbox" })).toHaveCount(0);
-  await expect(page.getByRole("region", { name: "Refund review" })).toHaveCount(0);
+  await expect(page.getByRole("region", { name: "Conversations" })).toHaveCount(0);
+  await expect(page.locator('section[aria-labelledby="refund-title"]')).toHaveCount(0);
 });
 
 test("workspace surfaces read from the local API", async ({ page }) => {
   await page.goto("/?surface=overview");
   await page.getByRole("button", { name: "Start Demo Workspace session" }).click();
-  await expect(page.getByRole("heading", { name: /clear view of today/ })).toBeVisible();
-  await expect(page.getByText("Total conversations").locator("..").getByText(/^\d+$/)).toBeVisible();
-  await page.getByRole("button", { name: "Knowledge" }).click();
+  await expect(page.getByRole("heading", { name: /Welcome,/ })).toBeVisible();
+  await expect(page.getByText(/^Total conversations: \d+$/)).toBeVisible();
+  await page.getByRole("button", { name: "Knowledge base" }).click();
   await expect(page.getByText("delivery-policy · v2", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: /delivery-policy.*v2/ }).click();
   await expect(page.getByText("A delivery investigation may be opened", { exact: false })).toBeVisible();
