@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pydantic import ValidationError
+import pytest
 
 from backend.app.config import ResolveAISettings
 
@@ -13,6 +14,9 @@ def test_settings_are_safe_and_external_inference_is_disabled_by_default() -> No
     assert settings.provider_request_quota == 0
     assert settings.provider_token_quota == 0
     assert settings.provider_max_output_tokens == 256
+    assert settings.evaluation_enabled is False
+    assert settings.evaluation_request_quota == 0
+    assert settings.evaluation_token_quota == 0
     assert settings.groq_api_key is None
     assert settings.gemini_api_key is None
     assert settings.openrouter_api_key is None
@@ -71,3 +75,22 @@ def test_invalid_provider_limits_fail_closed() -> None:
         assert "provider_max_output_tokens" in str(error)
     else:
         raise AssertionError("provider output cap must stay within the approved limit")
+
+
+def test_evaluation_mode_never_enables_the_customer_provider_gate(monkeypatch) -> None:
+    monkeypatch.setenv("RESOLVEAI_EXTERNAL_INFERENCE_ENABLED", "true")
+    monkeypatch.setenv("RESOLVEAI_EVALUATION_ENABLED", "true")
+    monkeypatch.setenv("RESOLVEAI_PROVIDER_REQUEST_QUOTA", "48")
+    monkeypatch.setenv("RESOLVEAI_PROVIDER_TOKEN_QUOTA", "50000")
+    monkeypatch.setenv("RESOLVEAI_GROQ_ENABLED", "true")
+    monkeypatch.setenv("RESOLVEAI_GROQ_MODEL", "qualified-model")
+    monkeypatch.setenv("GROQ_API_KEY", "secret-value")
+    settings = ResolveAISettings(_env_file=None)
+    assert settings.external_provider_allowed("groq") is False
+
+
+def test_evaluation_budget_cannot_exceed_authorized_tranche() -> None:
+    with pytest.raises(ValidationError):
+        ResolveAISettings(_env_file=None, evaluation_request_quota=49)
+    with pytest.raises(ValidationError):
+        ResolveAISettings(_env_file=None, evaluation_token_quota=50_001)

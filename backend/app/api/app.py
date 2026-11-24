@@ -1,5 +1,6 @@
 """Testable FastAPI routes for the deterministic M1 API slice."""
 
+from datetime import datetime, timedelta, timezone
 from typing import Awaitable, Callable, Literal
 
 from fastapi import Body, FastAPI, Header, Query, Request
@@ -30,7 +31,13 @@ from backend.app.ai.answer import PolicyRetriever
 from backend.app.ai.generation import PolicyAnswerProvider
 from backend.app.ai.investigation import InvestigationModel
 from backend.app.ai.local_transformers import LocalTransformersPolicyAnswerProvider
-from backend.app.ai.model_control import AdaptiveModelRouter, ModelRegistry, QuotaLedger
+from backend.app.ai.model_control import (
+    AdaptiveModelRouter,
+    ModelRegistry,
+    QuotaLedger,
+    QuotaUnavailable,
+    QuotaScopeConfig,
+)
 from backend.app.ai.provider_adapters import (
     ProviderConfigurationError,
     RoutedPolicyAnswerProvider,
@@ -159,6 +166,7 @@ def _configured_external_policy_response_provider(
     if (
         not settings.external_inference_enabled
         or settings.zero_cost_mode
+        or settings.evaluation_enabled
         or settings.provider_request_quota <= 0
         or settings.provider_token_quota <= 0
     ):
@@ -169,6 +177,32 @@ def _configured_external_policy_response_provider(
     try:
         registry = ModelRegistry(database_url, initialize_schema=False)
         quota = QuotaLedger(database_url)
+        models = registry.list()
+        if not models:
+            return None
+        reset_at = datetime.now(timezone.utc) + timedelta(
+            seconds=settings.provider_quota_window_seconds
+        )
+        scopes: dict[str, QuotaScopeConfig] = {}
+        for model in models:
+            for scope_key, provider in (
+                (model.quota_scope, model.provider),
+                (f"account:{model.provider}", model.provider),
+            ):
+                candidate = QuotaScopeConfig(
+                    scope_key=scope_key,
+                    provider=provider,
+                    request_limit=settings.provider_request_quota,
+                    token_limit=settings.provider_token_quota,
+                    concurrency_limit=settings.provider_max_concurrency,
+                    window_seconds=settings.provider_quota_window_seconds,
+                    reset_at=reset_at,
+                )
+                previous = scopes.get(scope_key)
+                if previous is not None and previous.provider != candidate.provider:
+                    raise ValueError("one quota scope cannot represent multiple providers")
+                scopes[scope_key] = candidate
+        quota.ensure_scopes(*scopes.values())
         adapters = {}
         for model in registry.list():
             try:
@@ -183,12 +217,12 @@ def _configured_external_policy_response_provider(
         if not adapters:
             return None
         return RoutedPolicyAnswerProvider(
-            AdaptiveModelRouter(registry, quota),
+            AdaptiveModelRouter(registry, quota, account_scope_prefix="account:"),
             adapters,
             estimated_tokens=min(settings.local_policy_max_new_tokens, 256),
             deadline_ms=settings.provider_timeout_seconds * 1000,
         )
-    except (SQLAlchemyError, OSError, ValueError):
+    except (QuotaUnavailable, SQLAlchemyError, OSError, ValueError):
         # Startup and local deterministic operation must not depend on a live
         # provider or an unavailable optional registry database.
         return None

@@ -178,6 +178,51 @@ class ResolveAISettings(BaseSettings):
         validation_alias="RESOLVEAI_PROVIDER_MAX_OUTPUT_TOKENS",
     )
 
+    # Evaluation budgets are separate from customer-serving provider quotas.
+    # They remain disabled until a trusted server-side evaluation harness
+    # supplies an explicit experiment identifier and non-zero limits.
+    evaluation_enabled: bool = Field(
+        default=False, validation_alias="RESOLVEAI_EVALUATION_ENABLED"
+    )
+    evaluation_experiment_id: str | None = Field(
+        default=None, validation_alias="RESOLVEAI_EVALUATION_EXPERIMENT_ID"
+    )
+    evaluation_allowed_providers: str = Field(
+        default="", validation_alias="RESOLVEAI_EVALUATION_ALLOWED_PROVIDERS"
+    )
+    evaluation_allowed_model_ids: str = Field(
+        default="", validation_alias="RESOLVEAI_EVALUATION_ALLOWED_MODEL_IDS"
+    )
+    evaluation_max_models_per_provider: int = Field(
+        default=2,
+        ge=1,
+        le=2,
+        validation_alias="RESOLVEAI_EVALUATION_MAX_MODELS_PER_PROVIDER",
+    )
+    evaluation_request_quota: int = Field(
+        default=0,
+        ge=0,
+        le=48,
+        validation_alias="RESOLVEAI_EVALUATION_REQUEST_QUOTA",
+    )
+    evaluation_token_quota: int = Field(
+        default=0,
+        ge=0,
+        le=50_000,
+        validation_alias="RESOLVEAI_EVALUATION_TOKEN_QUOTA",
+    )
+    evaluation_max_concurrency: int = Field(
+        default=1,
+        ge=1,
+        le=64,
+        validation_alias="RESOLVEAI_EVALUATION_MAX_CONCURRENCY",
+    )
+    evaluation_quota_window_seconds: int = Field(
+        default=86_400,
+        gt=0,
+        validation_alias="RESOLVEAI_EVALUATION_QUOTA_WINDOW_SECONDS",
+    )
+
     # Existing local policy and application configuration.
     policy_retrieval: str = Field(
         default="lexical", validation_alias="RESOLVEAI_POLICY_RETRIEVAL"
@@ -229,6 +274,7 @@ class ResolveAISettings(BaseSettings):
         "modelscope_base_url",
         "agnes_api_key",
         "chutes_api_key",
+        "evaluation_experiment_id",
         "database_url",
         "commerce_database_url",
         "auth_secret_key",
@@ -260,6 +306,7 @@ class ResolveAISettings(BaseSettings):
         if (
             not self.external_inference_enabled
             or self.zero_cost_mode
+            or self.evaluation_enabled
             or self.provider_request_quota <= 0
             or self.provider_token_quota <= 0
         ):

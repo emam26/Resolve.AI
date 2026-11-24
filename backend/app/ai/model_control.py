@@ -14,7 +14,7 @@ import threading
 import uuid
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable, Mapping, Sequence
+from typing import Any, Callable, Literal, Mapping, Sequence
 
 import httpx
 from sqlalchemy import (
@@ -26,6 +26,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     select,
+    text,
 )
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Mapped, mapped_column, sessionmaker
@@ -524,6 +525,7 @@ class QuotaWindowRow(Base):
     requests_used: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     tokens_used: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     in_flight: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    window_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=86_400)
     reset_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
@@ -532,6 +534,7 @@ class QuotaReservationRow(Base):
     __tablename__ = "ai_quota_reservations"
 
     reservation_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    reservation_group: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
     scope_key: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     estimated_tokens: Mapped[int] = mapped_column(Integer, nullable=False)
     actual_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -557,6 +560,7 @@ class RegisteredModel:
     approved_task_categories: frozenset[str]
     capabilities: frozenset[str]
     quota_scope: str
+    evaluation_version: str | None
     quality_score: float
     citation_validity: float
     latency_p50_ms: float
@@ -813,6 +817,7 @@ def _registered_model(row: ModelRegistryRow) -> RegisteredModel:
         ),
         capabilities=capabilities,
         quota_scope=row.quota_scope,
+        evaluation_version=row.evaluation_version,
         quality_score=float(_runtime_metrics(row.benchmark_json).get("supported_answer_accuracy", 0)),
         citation_validity=float(_runtime_metrics(row.benchmark_json).get("citation_validity", 0)),
         latency_p50_ms=_percentile(latencies, 0.50),
@@ -830,6 +835,7 @@ class QuotaReservation:
     reservation_id: str
     scope_key: str
     estimated_tokens: int
+    scope_keys: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -841,6 +847,19 @@ class QuotaSnapshot:
     requests_used: int
     tokens_used: int
     in_flight: int
+    reset_at: datetime
+
+
+@dataclass(frozen=True)
+class QuotaScopeConfig:
+    """Immutable startup/control-plane limits for one durable quota scope."""
+
+    scope_key: str
+    provider: str
+    request_limit: int
+    token_limit: int
+    concurrency_limit: int
+    window_seconds: int
     reset_at: datetime
 
 
@@ -864,11 +883,13 @@ class QuotaLedger:
         token_limit: int,
         concurrency_limit: int,
         reset_at: datetime,
+        window_seconds: int = 86_400,
     ) -> None:
-        if min(request_limit, token_limit, concurrency_limit) <= 0:
+        if min(request_limit, token_limit, concurrency_limit, window_seconds) <= 0:
             raise ValueError("verified quota limits must be positive")
         now = datetime.now(timezone.utc)
         with self._lock, self._session_factory.begin() as session:
+            _lock_quota_transaction(session)
             row = session.get(QuotaWindowRow, scope_key)
             if row is None:
                 session.add(
@@ -878,17 +899,173 @@ class QuotaLedger:
                         request_limit=request_limit,
                         token_limit=token_limit,
                         concurrency_limit=concurrency_limit,
+                        window_seconds=window_seconds,
                         reset_at=_utc(reset_at),
                         updated_at=now,
                     )
                 )
             else:
+                if (
+                    row.provider != provider
+                    or row.request_limit != request_limit
+                    or row.token_limit != token_limit
+                    or row.concurrency_limit != concurrency_limit
+                    or row.window_seconds != window_seconds
+                ):
+                    raise QuotaUnavailable(
+                        f"durable quota configuration differs for {scope_key}"
+                    )
                 row.provider = provider
-                row.request_limit = request_limit
-                row.token_limit = token_limit
-                row.concurrency_limit = concurrency_limit
-                row.reset_at = _utc(reset_at)
                 row.updated_at = now
+
+    @staticmethod
+    def experiment_scope_key(experiment_id: str) -> str:
+        """Return the only scope-key form accepted for evaluation budgets."""
+
+        normalized = experiment_id.strip()
+        if not normalized or any(char not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-" for char in normalized):
+            raise ValueError("experiment_id must contain only letters, numbers, '.', '_' or '-'")
+        return f"experiment:{normalized}"
+
+    def configure_experiment(
+        self,
+        experiment_id: str,
+        *,
+        request_limit: int,
+        token_limit: int,
+        concurrency_limit: int,
+        reset_at: datetime,
+        window_seconds: int = 86_400,
+    ) -> str:
+        """Create or update one durable budget shared by all providers in an experiment.
+
+        This is a control-plane operation.  The ordinary customer router never
+        uses an experiment scope unless an explicit evaluation request is built
+        by trusted server-side code.
+        """
+
+        scope_key = self.experiment_scope_key(experiment_id)
+        self.ensure_scopes(
+            QuotaScopeConfig(
+                scope_key=scope_key,
+                provider="shared-experiment",
+                request_limit=request_limit,
+                token_limit=token_limit,
+                concurrency_limit=concurrency_limit,
+                reset_at=reset_at,
+                window_seconds=window_seconds,
+            )
+        )
+        return scope_key
+
+    def configure_experiment_from_settings(self, settings: ResolveAISettings) -> str:
+        """Create an experiment budget only from explicit trusted settings.
+
+        No FastAPI request can call this method.  In the current application
+        there is intentionally no public evaluation endpoint; callers are
+        limited to a server-side synthetic harness.
+        """
+
+        if not settings.evaluation_enabled:
+            raise QuotaUnavailable("evaluation mode is disabled")
+        if not settings.evaluation_experiment_id:
+            raise QuotaUnavailable("evaluation experiment id is not configured")
+        if settings.evaluation_request_quota <= 0 or settings.evaluation_token_quota <= 0:
+            raise QuotaUnavailable("evaluation quota limits are not configured")
+        return self.configure_experiment(
+            settings.evaluation_experiment_id,
+            request_limit=settings.evaluation_request_quota,
+            token_limit=settings.evaluation_token_quota,
+            concurrency_limit=settings.evaluation_max_concurrency,
+            reset_at=datetime.now(timezone.utc)
+            + timedelta(seconds=settings.evaluation_quota_window_seconds),
+            window_seconds=settings.evaluation_quota_window_seconds,
+        )
+
+    def ensure_scopes(self, *configs: QuotaScopeConfig) -> None:
+        """Atomically initialize missing startup scopes without resetting usage.
+
+        Existing rows are immutable with respect to their limits and reset
+        period.  A settings change therefore fails closed instead of silently
+        granting new capacity or erasing consumed usage.  PostgreSQL and
+        SQLite conflict-safe inserts make concurrent application startup
+        converge on the same durable rows.
+        """
+
+        if not configs:
+            return
+        keys = [config.scope_key for config in configs]
+        if len(set(keys)) != len(keys):
+            raise ValueError("quota scope keys must be unique")
+        for config in configs:
+            if min(
+                config.request_limit,
+                config.token_limit,
+                config.concurrency_limit,
+                config.window_seconds,
+            ) <= 0:
+                raise ValueError("verified quota limits must be positive")
+
+        with self._lock, self._session_factory.begin() as session:
+            _lock_quota_transaction(session)
+            for config in configs:
+                row = session.get(QuotaWindowRow, config.scope_key, with_for_update=True)
+                if row is not None:
+                    if (
+                        row.provider != config.provider
+                        or row.request_limit != config.request_limit
+                        or row.token_limit != config.token_limit
+                        or row.concurrency_limit != config.concurrency_limit
+                        or row.window_seconds != config.window_seconds
+                    ):
+                        raise QuotaUnavailable(
+                            f"durable quota configuration differs for {config.scope_key}"
+                        )
+                    continue
+
+                values = {
+                    "scope_key": config.scope_key,
+                    "provider": config.provider,
+                    "request_limit": config.request_limit,
+                    "token_limit": config.token_limit,
+                    "concurrency_limit": config.concurrency_limit,
+                    "window_seconds": config.window_seconds,
+                    "requests_used": 0,
+                    "tokens_used": 0,
+                    "in_flight": 0,
+                    "reset_at": _utc(config.reset_at),
+                    "updated_at": datetime.now(timezone.utc),
+                }
+                dialect = session.bind.dialect.name
+                if dialect == "postgresql":
+                    from sqlalchemy.dialects.postgresql import insert as dialect_insert
+
+                    statement = dialect_insert(QuotaWindowRow).values(**values).on_conflict_do_nothing(
+                        index_elements=["scope_key"]
+                    )
+                elif dialect == "sqlite":
+                    from sqlalchemy.dialects.sqlite import insert as dialect_insert
+
+                    statement = dialect_insert(QuotaWindowRow).values(**values).on_conflict_do_nothing(
+                        index_elements=["scope_key"]
+                    )
+                else:
+                    session.add(QuotaWindowRow(**values))
+                    continue
+                session.execute(statement)
+
+            for config in configs:
+                row = session.get(QuotaWindowRow, config.scope_key, with_for_update=True)
+                if row is None or (
+                    row.provider != config.provider
+                    or row.request_limit != config.request_limit
+                    or row.token_limit != config.token_limit
+                    or row.concurrency_limit != config.concurrency_limit
+                    or row.window_seconds != config.window_seconds
+                ):
+                    raise QuotaUnavailable(
+                        f"durable quota configuration differs for {config.scope_key}"
+                    )
 
     def snapshot(self, scope_key: str, now: datetime | None = None) -> QuotaSnapshot:
         current = _utc(now or datetime.now(timezone.utc))
@@ -911,73 +1088,147 @@ class QuotaLedger:
             )
 
     def reserve(self, scope_key: str, estimated_tokens: int, now: datetime | None = None) -> QuotaReservation:
+        return self.reserve_scopes((scope_key,), estimated_tokens, now)
+
+    def reserve_scopes(
+        self,
+        scope_keys: Sequence[str],
+        estimated_tokens: int,
+        now: datetime | None = None,
+    ) -> QuotaReservation:
         if estimated_tokens <= 0:
             raise ValueError("estimated_tokens must be positive")
+        normalized_scopes = tuple(dict.fromkeys(scope_keys))
+        if not normalized_scopes:
+            raise ValueError("at least one quota scope is required")
         current = _utc(now or datetime.now(timezone.utc))
         reservation_id = f"quota_{uuid.uuid4().hex}"
         with self._lock, self._session_factory.begin() as session:
-            row = session.get(QuotaWindowRow, scope_key, with_for_update=True)
-            if row is None:
-                raise QuotaUnavailable("verified quota is not configured")
-            if _utc(row.reset_at) <= current:
-                row.requests_used = 0
-                row.tokens_used = 0
-                row.reset_at = current + timedelta(days=1)
-            if row.requests_used + 1 > row.request_limit:
-                raise QuotaExceeded("request quota exhausted")
-            if row.tokens_used + estimated_tokens > row.token_limit:
-                raise QuotaExceeded("token quota exhausted")
-            if row.in_flight >= row.concurrency_limit:
-                raise QuotaExceeded("concurrency quota exhausted")
-            row.requests_used += 1
-            row.tokens_used += estimated_tokens
-            row.in_flight += 1
-            row.updated_at = current
-            session.add(
-                QuotaReservationRow(
-                    reservation_id=reservation_id,
-                    scope_key=scope_key,
-                    estimated_tokens=estimated_tokens,
-                    actual_tokens=None,
-                    state="RESERVED",
-                    created_at=current,
+            _lock_quota_transaction(session)
+            rows: list[QuotaWindowRow] = []
+            for scope_key in sorted(normalized_scopes):
+                row = session.get(QuotaWindowRow, scope_key, with_for_update=True)
+                if row is None:
+                    raise QuotaUnavailable("verified quota is not configured")
+                if _utc(row.reset_at) <= current:
+                    row.requests_used = 0
+                    row.tokens_used = 0
+                    row.reset_at = current + timedelta(seconds=row.window_seconds)
+                if row.requests_used + 1 > row.request_limit:
+                    raise QuotaExceeded("request quota exhausted")
+                if row.tokens_used + estimated_tokens > row.token_limit:
+                    raise QuotaExceeded("token quota exhausted")
+                if row.in_flight >= row.concurrency_limit:
+                    raise QuotaExceeded("concurrency quota exhausted")
+                rows.append(row)
+
+            for index, row in enumerate(rows):
+                row.requests_used += 1
+                row.tokens_used += estimated_tokens
+                row.in_flight += 1
+                row.updated_at = current
+                session.add(
+                    QuotaReservationRow(
+                        reservation_id=f"{reservation_id}:{index}",
+                        reservation_group=reservation_id,
+                        scope_key=row.scope_key,
+                        estimated_tokens=estimated_tokens,
+                        actual_tokens=None,
+                        state="RESERVED",
+                        created_at=current,
+                    )
                 )
-            )
-        return QuotaReservation(reservation_id, scope_key, estimated_tokens)
+        return QuotaReservation(reservation_id, normalized_scopes[0], estimated_tokens, normalized_scopes)
 
     def complete(self, reservation: QuotaReservation, actual_tokens: int, now: datetime | None = None) -> None:
         if actual_tokens < 0:
             raise ValueError("actual_tokens must not be negative")
         current = _utc(now or datetime.now(timezone.utc))
         with self._lock, self._session_factory.begin() as session:
-            reservation_row = session.get(QuotaReservationRow, reservation.reservation_id, with_for_update=True)
-            if reservation_row is None or reservation_row.state != "RESERVED":
+            _lock_quota_transaction(session)
+            reservation_rows = session.scalars(
+                select(QuotaReservationRow)
+                .where(QuotaReservationRow.reservation_group == reservation.reservation_id)
+            ).all()
+            if not reservation_rows:
+                legacy_row = session.get(QuotaReservationRow, reservation.reservation_id)
+                reservation_rows = [legacy_row] if legacy_row is not None else []
+            if not reservation_rows:
                 return
-            window = session.get(QuotaWindowRow, reservation.scope_key, with_for_update=True)
-            if window is None:
-                raise QuotaUnavailable("quota window disappeared")
-            window.tokens_used = max(0, window.tokens_used - reservation.estimated_tokens + actual_tokens)
-            window.in_flight = max(0, window.in_flight - 1)
-            window.updated_at = current
-            reservation_row.actual_tokens = actual_tokens
-            reservation_row.state = "COMPLETED"
-            reservation_row.completed_at = current
+
+            # Reserve, completion, release and reconciliation all acquire
+            # quota-window locks before reservation-row locks.  A stable lock
+            # order prevents PostgreSQL deadlocks under concurrent workers.
+            windows: dict[str, QuotaWindowRow] = {}
+            for scope_key in sorted({row.scope_key for row in reservation_rows}):
+                window = session.get(QuotaWindowRow, scope_key, with_for_update=True)
+                if window is None:
+                    raise QuotaUnavailable("quota window disappeared")
+                windows[scope_key] = window
+            if reservation_rows[0].reservation_group == reservation.reservation_id:
+                reservation_rows = session.scalars(
+                    select(QuotaReservationRow)
+                    .where(QuotaReservationRow.reservation_group == reservation.reservation_id)
+                    .order_by(QuotaReservationRow.scope_key)
+                    .with_for_update()
+                ).all()
+            else:
+                legacy_row = session.get(QuotaReservationRow, reservation.reservation_id, with_for_update=True)
+                reservation_rows = [legacy_row] if legacy_row is not None else []
+            if not reservation_rows or any(row.state != "RESERVED" for row in reservation_rows):
+                return
+            for reservation_row in reservation_rows:
+                window = windows[reservation_row.scope_key]
+                window.tokens_used = max(0, window.tokens_used - reservation_row.estimated_tokens + actual_tokens)
+                window.in_flight = max(0, window.in_flight - 1)
+                window.updated_at = current
+                reservation_row.actual_tokens = actual_tokens
+                reservation_row.state = (
+                    "OVERRUN"
+                    if actual_tokens > reservation_row.estimated_tokens
+                    else "COMPLETED"
+                )
+                reservation_row.completed_at = current
 
     def release(self, reservation: QuotaReservation, now: datetime | None = None) -> None:
         current = _utc(now or datetime.now(timezone.utc))
         with self._lock, self._session_factory.begin() as session:
-            reservation_row = session.get(QuotaReservationRow, reservation.reservation_id, with_for_update=True)
-            if reservation_row is None or reservation_row.state != "RESERVED":
+            _lock_quota_transaction(session)
+            reservation_rows = session.scalars(
+                select(QuotaReservationRow)
+                .where(QuotaReservationRow.reservation_group == reservation.reservation_id)
+            ).all()
+            if not reservation_rows:
+                legacy_row = session.get(QuotaReservationRow, reservation.reservation_id)
+                reservation_rows = [legacy_row] if legacy_row is not None else []
+            if not reservation_rows:
                 return
-            window = session.get(QuotaWindowRow, reservation.scope_key, with_for_update=True)
-            if window is None:
+            windows: dict[str, QuotaWindowRow] = {}
+            for scope_key in sorted({row.scope_key for row in reservation_rows}):
+                window = session.get(QuotaWindowRow, scope_key, with_for_update=True)
+                if window is None:
+                    return
+                windows[scope_key] = window
+            if reservation_rows[0].reservation_group == reservation.reservation_id:
+                reservation_rows = session.scalars(
+                    select(QuotaReservationRow)
+                    .where(QuotaReservationRow.reservation_group == reservation.reservation_id)
+                    .order_by(QuotaReservationRow.scope_key)
+                    .with_for_update()
+                ).all()
+            else:
+                legacy_row = session.get(QuotaReservationRow, reservation.reservation_id, with_for_update=True)
+                reservation_rows = [legacy_row] if legacy_row is not None else []
+            if not reservation_rows or any(row.state != "RESERVED" for row in reservation_rows):
                 return
-            window.requests_used = max(0, window.requests_used - 1)
-            window.tokens_used = max(0, window.tokens_used - reservation.estimated_tokens)
-            window.in_flight = max(0, window.in_flight - 1)
-            window.updated_at = current
-            reservation_row.state = "RELEASED"
-            reservation_row.completed_at = current
+            for reservation_row in reservation_rows:
+                window = windows[reservation_row.scope_key]
+                window.requests_used = max(0, window.requests_used - 1)
+                window.tokens_used = max(0, window.tokens_used - reservation_row.estimated_tokens)
+                window.in_flight = max(0, window.in_flight - 1)
+                window.updated_at = current
+                reservation_row.state = "RELEASED"
+                reservation_row.completed_at = current
 
     def reconcile_in_flight(self) -> int:
         """Clear abandoned in-flight slots while retaining conservative usage."""
@@ -985,11 +1236,21 @@ class QuotaLedger:
         now = datetime.now(timezone.utc)
         changed = 0
         with self._lock, self._session_factory.begin() as session:
+            _lock_quota_transaction(session)
+            scope_keys = session.scalars(
+                select(QuotaReservationRow.scope_key)
+                .where(QuotaReservationRow.state == "RESERVED")
+                .distinct()
+            ).all()
+            for scope_key in sorted(scope_keys):
+                session.get(QuotaWindowRow, scope_key, with_for_update=True)
             pending = session.scalars(
-                select(QuotaReservationRow).where(QuotaReservationRow.state == "RESERVED")
+                select(QuotaReservationRow)
+                .where(QuotaReservationRow.state == "RESERVED")
+                .with_for_update()
             ).all()
             for reservation in pending:
-                window = session.get(QuotaWindowRow, reservation.scope_key, with_for_update=True)
+                window = session.get(QuotaWindowRow, reservation.scope_key)
                 if window is not None:
                     window.in_flight = max(0, window.in_flight - 1)
                 reservation.state = "RECONCILED"
@@ -1005,6 +1266,8 @@ class RouteRequest:
     estimated_tokens: int = 256
     deadline_ms: float | None = None
     manual_model_id: str | None = None
+    execution_mode: Literal["customer", "evaluation"] = "customer"
+    experiment_scope_key: str | None = None
 
 
 @dataclass(frozen=True)
@@ -1020,16 +1283,33 @@ class RouteDecision:
 class AdaptiveModelRouter:
     """Deterministic, quota-aware selection among already active models."""
 
-    def __init__(self, registry: ModelRegistry, quota_ledger: QuotaLedger) -> None:
+    def __init__(
+        self,
+        registry: ModelRegistry,
+        quota_ledger: QuotaLedger,
+        *,
+        account_scope_prefix: str | None = None,
+    ) -> None:
         self._registry = registry
         self._quota = quota_ledger
+        self._account_scope_prefix = account_scope_prefix
 
     def select(self, request: RouteRequest, now: datetime | None = None) -> RouteDecision | None:
+        if request.execution_mode == "customer" and request.experiment_scope_key is not None:
+            raise ModelNotRoutable("customer requests cannot provide an evaluation scope")
+        if request.execution_mode == "evaluation":
+            if not request.experiment_scope_key or not request.experiment_scope_key.startswith("experiment:"):
+                raise ModelNotRoutable("evaluation requests require a trusted experiment scope")
+        elif request.execution_mode != "customer":
+            raise ModelNotRoutable("unknown execution mode")
         current = _utc(now or datetime.now(timezone.utc))
         self._registry.recover_due(current)
         candidates = []
         for model in self._registry.list():
-            if model.lifecycle != "ACTIVE" or model.health_state != "HEALTHY":
+            allowed_lifecycles = {"ACTIVE"} if request.execution_mode == "customer" else {"QUALIFIED", "ACTIVE"}
+            if model.lifecycle not in allowed_lifecycles or model.health_state != "HEALTHY":
+                continue
+            if request.execution_mode == "evaluation" and not model.evaluation_version:
                 continue
             if not model.available or model.deprecated or model.free_eligible is not True:
                 continue
@@ -1043,13 +1323,25 @@ class AdaptiveModelRouter:
                 continue
             if model.health_cooldown_until and model.health_cooldown_until > current:
                 continue
-            snapshot = self._quota.snapshot(model.quota_scope, current)
-            if snapshot.requests_used >= snapshot.request_limit:
+            scope_keys = [model.quota_scope]
+            if self._account_scope_prefix:
+                scope_keys.append(f"{self._account_scope_prefix}{model.provider}")
+            if request.execution_mode == "evaluation":
+                scope_keys.append(request.experiment_scope_key)
+            snapshots = []
+            try:
+                for scope_key in dict.fromkeys(scope_keys):
+                    snapshot = self._quota.snapshot(scope_key, current)
+                    if snapshot.requests_used >= snapshot.request_limit:
+                        raise QuotaExceeded("request quota exhausted")
+                    if snapshot.tokens_used + request.estimated_tokens > snapshot.token_limit:
+                        raise QuotaExceeded("token quota exhausted")
+                    if snapshot.in_flight >= snapshot.concurrency_limit:
+                        raise QuotaExceeded("concurrency quota exhausted")
+                    snapshots.append(snapshot)
+            except (QuotaUnavailable, QuotaExceeded):
                 continue
-            if snapshot.tokens_used + request.estimated_tokens > snapshot.token_limit:
-                continue
-            if snapshot.in_flight >= snapshot.concurrency_limit:
-                continue
+            snapshot = snapshots[0]
             if request.deadline_ms is not None and model.latency_p95_ms > request.deadline_ms:
                 continue
             quota_headroom = 1 - (snapshot.tokens_used / snapshot.token_limit)
@@ -1062,8 +1354,15 @@ class AdaptiveModelRouter:
             )
             candidates.append((score, model))
         for score, model in sorted(candidates, key=lambda item: (-item[0], item[1].model_key)):
+            scope_keys = [model.quota_scope]
+            if self._account_scope_prefix:
+                scope_keys.append(f"{self._account_scope_prefix}{model.provider}")
+            if request.execution_mode == "evaluation":
+                scope_keys.append(request.experiment_scope_key)
             try:
-                reservation = self._quota.reserve(model.quota_scope, request.estimated_tokens, current)
+                reservation = self._quota.reserve_scopes(
+                    tuple(dict.fromkeys(scope_keys)), request.estimated_tokens, current
+                )
             except (QuotaUnavailable, QuotaExceeded):
                 continue
             return RouteDecision(
@@ -1076,8 +1375,20 @@ class AdaptiveModelRouter:
             )
         return None
 
-    def report_success(self, decision: RouteDecision, *, actual_tokens: int, latency_ms: float) -> None:
-        self._quota.complete(decision.reservation, actual_tokens)
+    def report_success(
+        self,
+        decision: RouteDecision,
+        *,
+        actual_tokens: int,
+        latency_ms: float,
+        usage_known: bool = True,
+    ) -> None:
+        settled_tokens = (
+            actual_tokens
+            if usage_known
+            else max(decision.reservation.estimated_tokens, actual_tokens)
+        )
+        self._quota.complete(decision.reservation, settled_tokens)
         self._registry.update_runtime(decision.model_key, success=True, latency_ms=latency_ms)
 
     def report_failure(
@@ -1087,9 +1398,19 @@ class AdaptiveModelRouter:
         failure_kind: str,
         retry_after_seconds: float = 0,
         dispatched: bool = True,
+        actual_tokens: int | None = None,
     ) -> None:
         if dispatched:
-            self._quota.complete(decision.reservation, 0)
+            # Unknown or incomplete provider usage must retain the reservation
+            # rather than being settled as zero.  A caller may provide an
+            # authoritative actual count, but it may not reduce a failed
+            # dispatch below the durable reservation without evidence.
+            settled_tokens = (
+                decision.reservation.estimated_tokens
+                if actual_tokens is None
+                else max(0, actual_tokens)
+            )
+            self._quota.complete(decision.reservation, settled_tokens)
         else:
             self._quota.release(decision.reservation)
         self._registry.update_runtime(
@@ -1104,6 +1425,22 @@ def _utc(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)
     return value.astimezone(timezone.utc)
+
+
+def _lock_quota_transaction(session) -> None:
+    """Serialize the short quota-control transactions on PostgreSQL.
+
+    Reservations can span a model, provider-account and experiment window.
+    A database advisory lock prevents startup reconciliation and multi-scope
+    completion from interleaving with another worker's row updates.  SQLite
+    already uses the ledger's process lock and does not expose this function.
+    """
+
+    bind = session.get_bind()
+    if bind is not None and bind.dialect.name == "postgresql":
+        session.execute(
+            text("SELECT pg_advisory_xact_lock(hashtext('resolveai:quota-control-v1'))")
+        )
 
 
 __all__ = [
@@ -1125,6 +1462,7 @@ __all__ = [
     "QualificationRejected",
     "QuotaExceeded",
     "QuotaLedger",
+    "QuotaScopeConfig",
     "QuotaReservation",
     "QuotaReservationRow",
     "QuotaSnapshot",

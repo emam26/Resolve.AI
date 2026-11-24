@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from concurrent.futures import ThreadPoolExecutor
 
 import httpx
 import pytest
@@ -10,12 +11,15 @@ from backend.app.ai.model_control import (
     DiscoveryUnavailable,
     ModelDescriptor,
     ModelDiscoveryService,
+    ModelNotRoutable,
     ModelRegistry,
     QualificationEvidence,
     QualificationPolicy,
     QualificationRejected,
     QuotaExceeded,
     QuotaLedger,
+    QuotaScopeConfig,
+    QuotaUnavailable,
     RouteRequest,
     parse_rate_limit_headers,
 )
@@ -290,3 +294,262 @@ def test_rate_limit_headers_are_parsed_without_assuming_all_provider_limits() ->
     assert metadata.request_limit == 10
     assert metadata.requests_remaining == 4
     assert metadata.retry_after_seconds == 2
+
+
+def _configure_routing_scopes(
+    ledger: QuotaLedger,
+    descriptors: tuple[ModelDescriptor, ...],
+    *,
+    request_limit: int = 10,
+    token_limit: int = 1_000,
+    concurrency_limit: int = 2,
+) -> None:
+    reset_at = datetime.now(timezone.utc) + timedelta(hours=1)
+    for descriptor in descriptors:
+        ledger.configure_scope(
+            descriptor.quota_scope or descriptor.provider,
+            provider=descriptor.provider,
+            request_limit=request_limit,
+            token_limit=token_limit,
+            concurrency_limit=concurrency_limit,
+            reset_at=reset_at,
+        )
+        ledger.configure_scope(
+            f"account:{descriptor.provider}",
+            provider=descriptor.provider,
+            request_limit=request_limit,
+            token_limit=token_limit,
+            concurrency_limit=concurrency_limit,
+            reset_at=reset_at,
+        )
+
+
+def test_shared_experiment_budget_is_atomic_across_provider_scopes() -> None:
+    registry = ModelRegistry()
+    groq = _descriptor("eval-groq", provider="groq")
+    gemini = _descriptor("eval-gemini", provider="gemini")
+    for descriptor in (groq, gemini):
+        registry.upsert_discovered([descriptor])
+        registry.admit(descriptor.model_key, descriptor, _evidence())
+
+    ledger = QuotaLedger()
+    _configure_routing_scopes(ledger, (groq, gemini))
+    experiment_scope = ledger.configure_experiment(
+        "m18-fix-boundary",
+        request_limit=2,
+        token_limit=30,
+        concurrency_limit=2,
+        reset_at=datetime.now(timezone.utc) + timedelta(hours=1),
+    )
+    router = AdaptiveModelRouter(registry, ledger, account_scope_prefix="account:")
+
+    first = router.select(
+        RouteRequest(
+            manual_model_id=groq.model_id,
+            estimated_tokens=20,
+            execution_mode="evaluation",
+            experiment_scope_key=experiment_scope,
+        )
+    )
+    assert first is not None
+    second = router.select(
+        RouteRequest(
+            manual_model_id=gemini.model_id,
+            estimated_tokens=15,
+            execution_mode="evaluation",
+            experiment_scope_key=experiment_scope,
+        )
+    )
+    assert second is None
+    router.report_success(first, actual_tokens=20, latency_ms=10)
+
+    exact_boundary = router.select(
+        RouteRequest(
+            manual_model_id=gemini.model_id,
+            estimated_tokens=10,
+            execution_mode="evaluation",
+            experiment_scope_key=experiment_scope,
+        )
+    )
+    assert exact_boundary is not None
+    assert ledger.snapshot(experiment_scope).requests_used == 2
+    assert ledger.snapshot(experiment_scope).tokens_used == 30
+    router.report_success(exact_boundary, actual_tokens=10, latency_ms=10)
+
+
+def test_experiment_budget_from_settings_requires_explicit_nonzero_enablement() -> None:
+    ledger = QuotaLedger()
+    with pytest.raises(QuotaUnavailable, match="evaluation mode is disabled"):
+        ledger.configure_experiment_from_settings(ResolveAISettings(_env_file=None))
+
+    settings = ResolveAISettings(
+        _env_file=None,
+        evaluation_enabled=True,
+        evaluation_experiment_id="approved-synthetic",
+        evaluation_request_quota=48,
+        evaluation_token_quota=50_000,
+        evaluation_max_concurrency=2,
+    )
+    scope = ledger.configure_experiment_from_settings(settings)
+    snapshot = ledger.snapshot(scope)
+    assert scope == "experiment:approved-synthetic"
+    assert snapshot.request_limit == 48
+    assert snapshot.token_limit == 50_000
+    assert snapshot.concurrency_limit == 2
+
+
+def test_experiment_capacity_survives_restart_and_reconciliation(tmp_path) -> None:
+    database_url = f"sqlite+pysqlite:///{tmp_path / 'experiment.db'}"
+    ledger = QuotaLedger(database_url)
+    scope = ledger.configure_experiment(
+        "restart-safe",
+        request_limit=2,
+        token_limit=20,
+        concurrency_limit=1,
+        reset_at=datetime.now(timezone.utc) + timedelta(hours=1),
+    )
+    reservation = ledger.reserve(scope, 10)
+
+    restarted = QuotaLedger(database_url)
+    after_restart = restarted.snapshot(scope)
+    assert after_restart.requests_used == 1
+    assert after_restart.tokens_used == 10
+    assert after_restart.in_flight == 0
+    next_reservation = restarted.reserve(scope, 10)
+    restarted.complete(next_reservation, 10)
+    with pytest.raises(QuotaExceeded, match="request"):
+        restarted.reserve(scope, 1)
+    # The abandoned reservation cannot later reduce consumed experiment usage.
+    restarted.complete(reservation, 0)
+    assert restarted.snapshot(scope).tokens_used == 20
+
+
+def test_concurrent_shared_reservations_cannot_oversubscribe_budget() -> None:
+    ledger = QuotaLedger()
+    scope = ledger.configure_experiment(
+        "concurrency-boundary",
+        request_limit=4,
+        token_limit=40,
+        concurrency_limit=4,
+        reset_at=datetime.now(timezone.utc) + timedelta(hours=1),
+    )
+
+    def reserve_one() -> bool:
+        try:
+            ledger.reserve(scope, 10)
+            return True
+        except QuotaExceeded:
+            return False
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        outcomes = list(pool.map(lambda _item: reserve_one(), range(8)))
+    assert sum(outcomes) == 4
+    snapshot = ledger.snapshot(scope)
+    assert snapshot.requests_used == 4
+    assert snapshot.tokens_used == 40
+    assert snapshot.in_flight == 4
+
+
+def test_startup_scope_initialization_is_idempotent_and_fails_closed_on_changes(tmp_path) -> None:
+    database_url = f"sqlite+pysqlite:///{tmp_path / 'startup.db'}"
+    reset_at = datetime.now(timezone.utc) + timedelta(hours=1)
+    config = QuotaScopeConfig(
+        scope_key="account:groq",
+        provider="groq",
+        request_limit=48,
+        token_limit=50_000,
+        concurrency_limit=2,
+        window_seconds=86_400,
+        reset_at=reset_at,
+    )
+    ledger = QuotaLedger(database_url)
+    ledger.ensure_scopes(config)
+    reservation = ledger.reserve("account:groq", 256)
+    restarted = QuotaLedger(database_url)
+    restarted.ensure_scopes(config)
+    assert restarted.snapshot("account:groq").tokens_used == 256
+    with pytest.raises(QuotaUnavailable, match="durable quota configuration differs"):
+        restarted.ensure_scopes(
+            QuotaScopeConfig(
+                scope_key="account:groq",
+                provider="groq",
+                request_limit=49,
+                token_limit=50_000,
+                concurrency_limit=2,
+                window_seconds=86_400,
+                reset_at=reset_at,
+            )
+        )
+    restarted.release(reservation)
+
+
+def test_customer_mode_cannot_consume_evaluation_budget_or_use_qualified_only_model() -> None:
+    registry = ModelRegistry()
+    descriptor = _descriptor("evaluation-only")
+    registry.upsert_discovered([descriptor])
+    registry.admit(descriptor.model_key, descriptor, _evidence())
+    ledger = QuotaLedger()
+    _configure_routing_scopes(ledger, (descriptor,))
+    experiment_scope = ledger.configure_experiment(
+        "isolation",
+        request_limit=1,
+        token_limit=256,
+        concurrency_limit=1,
+        reset_at=datetime.now(timezone.utc) + timedelta(hours=1),
+    )
+    router = AdaptiveModelRouter(registry, ledger, account_scope_prefix="account:")
+
+    assert router.select(RouteRequest()) is None
+    assert ledger.snapshot(experiment_scope).requests_used == 0
+    evaluation = router.select(
+        RouteRequest(execution_mode="evaluation", experiment_scope_key=experiment_scope)
+    )
+    assert evaluation is not None
+    router.report_failure(evaluation, failure_kind="test", dispatched=False)
+    with pytest.raises(ModelNotRoutable, match="evaluation scope"):
+        router.select(RouteRequest(experiment_scope_key=experiment_scope))
+
+
+def test_unknown_success_usage_never_settles_below_reserved_capacity() -> None:
+    registry = ModelRegistry()
+    descriptor = _descriptor("unknown-usage")
+    registry.upsert_discovered([descriptor])
+    registry.admit(descriptor.model_key, descriptor, _evidence())
+    registry.activate(descriptor.model_key)
+    ledger = QuotaLedger()
+    ledger.configure_scope(
+        descriptor.quota_scope,
+        provider=descriptor.provider,
+        request_limit=2,
+        token_limit=300,
+        concurrency_limit=1,
+        reset_at=datetime.now(timezone.utc) + timedelta(hours=1),
+    )
+    router = AdaptiveModelRouter(registry, ledger)
+    decision = router.select(RouteRequest(estimated_tokens=256))
+    assert decision is not None
+    router.report_success(decision, actual_tokens=8, usage_known=False, latency_ms=1)
+    assert ledger.snapshot(descriptor.quota_scope).tokens_used == 256
+
+
+def test_actual_token_overrun_is_recorded_and_stops_further_dispatch() -> None:
+    registry = ModelRegistry()
+    descriptor = _descriptor("overrun-usage")
+    registry.upsert_discovered([descriptor])
+    registry.admit(descriptor.model_key, descriptor, _evidence())
+    registry.activate(descriptor.model_key)
+    ledger = QuotaLedger()
+    ledger.configure_scope(
+        descriptor.quota_scope,
+        provider=descriptor.provider,
+        request_limit=2,
+        token_limit=300,
+        concurrency_limit=1,
+        reset_at=datetime.now(timezone.utc) + timedelta(hours=1),
+    )
+    router = AdaptiveModelRouter(registry, ledger)
+    decision = router.select(RouteRequest(estimated_tokens=256))
+    assert decision is not None
+    router.report_success(decision, actual_tokens=400, latency_ms=1)
+    assert ledger.snapshot(descriptor.quota_scope).tokens_used == 400
+    assert router.select(RouteRequest(estimated_tokens=1)) is None

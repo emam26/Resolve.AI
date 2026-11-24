@@ -23,6 +23,9 @@ from backend.app.ai.provider_adapters import (
     ProviderRequestError,
     ProviderUsage,
     RoutedPolicyAnswerProvider,
+    _conservative_prompt_token_bound,
+    _prompt_messages,
+    _usage_from_mapping,
     build_provider_adapter,
 )
 from backend.app.config import ResolveAISettings
@@ -90,7 +93,11 @@ def test_openai_compatible_adapters_cover_groq_openrouter_agnes_chutes_and_model
 
         if provider == "modelscope":
             adapter = ModelScopePolicyAnswerProvider(
-                "model-a", "secret-value", base_url="https://models.example.test/v1", client=_client(handler)
+                "model-a",
+                "secret-value",
+                base_url="https://models.example.test/v1",
+                allowed_hosts={"models.example.test"},
+                client=_client(handler),
             )
         else:
             adapter = OpenAICompatiblePolicyAnswerProvider(
@@ -193,6 +200,124 @@ def test_timeout_is_safe_and_invalid_json_is_rejected() -> None:
         invalid.generate(PROMPT)
 
 
+def test_provider_usage_handles_missing_or_incomplete_totals_without_double_counting() -> None:
+    nested = _usage_from_mapping(
+        {
+            "prompt_tokens": 10,
+            "completion_tokens": 8,
+            "total_tokens": 18,
+            "completion_tokens_details": {"reasoning_tokens": 3},
+            "prompt_tokens_details": {"cached_tokens": 2},
+        }
+    )
+    assert nested.reasoning_tokens == 3
+    assert nested.cached_tokens == 2
+    assert nested.accounted_tokens == 18
+
+    missing_total = _usage_from_mapping(
+        {"input_tokens": 10, "output_tokens": 8, "reasoning_tokens": 3, "other_tokens": 2}
+    )
+    assert missing_total.accounted_tokens == 23
+
+    incomplete_total = ProviderUsage(
+        input_tokens=10,
+        output_tokens=8,
+        total_tokens=5,
+        reasoning_tokens=3,
+        reasoning_tokens_included=True,
+    )
+    assert incomplete_total.accounted_tokens == 18
+
+
+def test_prompt_reservation_uses_utf8_upper_bound_for_unicode_and_json() -> None:
+    unicode_prompt = PolicyAnswerPrompt(
+        query="আমি কি এই অর্ডারটি ফেরত দিতে পারি? 🛍️",
+        evidence=PROMPT.evidence,
+    )
+    system, user = _prompt_messages(unicode_prompt)
+    assert _conservative_prompt_token_bound(unicode_prompt) >= len(
+        (system + "\n" + user).encode("utf-8")
+    )
+
+
+def test_missing_usage_is_explicitly_unknown_and_provider_failures_keep_estimate() -> None:
+    assert _usage_from_mapping(None).usage_unknown is True
+
+    def timeout_handler(request: httpx.Request):
+        raise httpx.ReadTimeout("provider timed out", request=request)
+
+    adapter = GeminiPolicyAnswerProvider("gemini-test", "secret-value", client=_client(timeout_handler))
+    with pytest.raises(ProviderRequestError) as error:
+        adapter.generate(PROMPT)
+    assert error.value.usage_unknown is True
+    assert error.value.usage is adapter.last_usage
+    assert error.value.usage is not None
+    assert error.value.usage.accounted_tokens >= 256
+
+
+def test_malformed_response_preserves_authoritative_usage_for_caller() -> None:
+    def invalid_handler(request: httpx.Request):
+        return httpx.Response(
+            200,
+            json={
+                "choices": [],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 8},
+            },
+            request=request,
+        )
+
+    adapter = OpenAICompatiblePolicyAnswerProvider("groq", "model-a", "secret-value", client=_client(invalid_handler))
+    with pytest.raises(ProviderRequestError) as error:
+        adapter.generate(PROMPT)
+    assert error.value.usage_unknown is False
+    assert error.value.usage is not None
+    assert error.value.usage.accounted_tokens == 18
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    [
+        "http://models.example.test/v1",
+        "https://127.0.0.1/v1",
+        "https://169.254.169.254/v1",
+        "https://metadata.google.internal/v1",
+        "https://arbitrary.example/v1",
+    ],
+)
+def test_configurable_endpoints_reject_unsafe_or_unverified_hosts(base_url: str) -> None:
+    with pytest.raises(ProviderConfigurationError):
+        ModelScopePolicyAnswerProvider("model-a", "secret-value", base_url=base_url)
+
+
+def test_configurable_endpoint_test_allowlist_is_explicit_and_https_only() -> None:
+    adapter = ModelScopePolicyAnswerProvider(
+        "model-a",
+        "secret-value",
+        base_url="https://models.example.test/v1",
+        allowed_hosts={"models.example.test"},
+        client=_client(
+            lambda request: httpx.Response(
+                200,
+                json={
+                    "choices": [{"message": {"content": json_text(EXPECTED)}}],
+                    "usage": {"total_tokens": 12},
+                },
+                request=request,
+            )
+        ),
+    )
+    assert adapter.generate(PROMPT) == EXPECTED
+
+    with pytest.raises(ProviderConfigurationError):
+        OpenAICompatiblePolicyAnswerProvider(
+            "groq",
+            "model-a",
+            "secret-value",
+            base_url="https://arbitrary.example/v1",
+            allowed_hosts=None,
+        )
+
+
 def test_factory_keeps_external_inference_fail_closed_by_default() -> None:
     settings = ResolveAISettings(_env_file=None, groq_api_key="secret-value", groq_model="model-a")
     with pytest.raises(ProviderConfigurationError, match="disabled"):
@@ -231,7 +356,7 @@ def test_routed_provider_uses_registry_quota_and_reports_usage() -> None:
         descriptor.quota_scope,
         provider="groq",
         request_limit=2,
-        token_limit=1000,
+        token_limit=4_000,
         concurrency_limit=1,
         reset_at=datetime.now(timezone.utc) + timedelta(hours=1),
     )
@@ -254,6 +379,63 @@ def test_routed_provider_uses_registry_quota_and_reports_usage() -> None:
     assert provider.last_usage is not None
     assert ledger.snapshot(descriptor.quota_scope).requests_used == 1
     assert ledger.snapshot(descriptor.quota_scope).tokens_used == 12
+
+
+def test_routed_provider_failure_retains_conservative_reserved_usage() -> None:
+    registry = ModelRegistry()
+    descriptor = ModelDescriptor(
+        provider="groq",
+        model_id="model-failure",
+        capabilities=frozenset({"structured_outputs", "text"}),
+        structured_output_supported=True,
+        free_eligible=True,
+        privacy_eligible=True,
+        quota_scope="groq:model-failure",
+    )
+    registry.upsert_discovered([descriptor])
+    registry.admit(
+        descriptor.model_key,
+        descriptor,
+        QualificationEvidence(
+            structured_output_compliance=1,
+            supported_answer_accuracy=0.95,
+            citation_validity=1,
+            unsupported_safety=1,
+            false_acceptance=0,
+            wrong_version_exposure=0,
+            p95_latency_ms=50,
+            evaluation_version="dev-1",
+        ),
+    )
+    registry.activate(descriptor.model_key)
+    ledger = QuotaLedger()
+    ledger.configure_scope(
+        descriptor.quota_scope,
+        provider="groq",
+        request_limit=2,
+        token_limit=2_000,
+        concurrency_limit=1,
+        reset_at=datetime.now(timezone.utc) + timedelta(hours=1),
+    )
+
+    def timeout_handler(request: httpx.Request):
+        raise httpx.ReadTimeout("provider timed out", request=request)
+
+    provider = RoutedPolicyAnswerProvider(
+        AdaptiveModelRouter(registry, ledger),
+        {
+            descriptor.model_key: OpenAICompatiblePolicyAnswerProvider(
+                "groq", "model-failure", "secret-value", client=_client(timeout_handler)
+            )
+        },
+    )
+    with pytest.raises(ProviderRequestError, match="timeout"):
+        provider.generate(PROMPT)
+    snapshot = ledger.snapshot(descriptor.quota_scope)
+    assert snapshot.requests_used == 1
+    assert snapshot.tokens_used >= 256
+    assert snapshot.tokens_used < 2_000
+    assert snapshot.in_flight == 0
 
 
 def json_text(value: Mapping[str, object]) -> str:
