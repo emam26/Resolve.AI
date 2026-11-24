@@ -2,8 +2,14 @@ from __future__ import annotations
 
 import pytest
 
+from backend.app.ai.answer import answer_from_published_policy
 from backend.app.ai.evaluation import build_trusted_evaluation_provider
-from backend.app.ai.provider_adapters import ProviderConfigurationError, RoutedPolicyAnswerProvider
+from backend.app.ai.generation import PolicyAnswerPrompt
+from backend.app.ai.provider_adapters import (
+    ProviderConfigurationError,
+    ProviderRequestError,
+    RoutedPolicyAnswerProvider,
+)
 from backend.app.config import ResolveAISettings
 
 
@@ -49,6 +55,73 @@ def test_routed_customer_provider_cannot_receive_evaluation_scope() -> None:
             adapters={},
             experiment_scope_key="experiment:private",
         )
+
+
+def test_evaluation_provider_rejects_customer_prompt_before_routing() -> None:
+    class UnexpectedRouterCall:
+        def select(self, request):  # pragma: no cover - a failed boundary is the assertion
+            raise AssertionError(f"router was called for {request}")
+
+    provider = RoutedPolicyAnswerProvider(
+        router=UnexpectedRouterCall(),
+        adapters={},
+        execution_mode="evaluation",
+        experiment_scope_key="experiment:synthetic",
+    )
+
+    with pytest.raises(ProviderRequestError, match="execution_scope_mismatch"):
+        provider.generate(PolicyAnswerPrompt(query="shipment delayed", evidence=[]))
+
+
+def test_customer_answer_falls_back_without_dispatching_to_evaluation_provider() -> None:
+    class UnexpectedRouterCall:
+        def select(self, request):  # pragma: no cover - a failed boundary is the assertion
+            raise AssertionError(f"router was called for {request}")
+
+    provider = RoutedPolicyAnswerProvider(
+        router=UnexpectedRouterCall(),
+        adapters={},
+        execution_mode="evaluation",
+        experiment_scope_key="experiment:synthetic",
+    )
+
+    response = answer_from_published_policy(
+        "shipment delayed",
+        response_provider=provider,
+    )
+
+    assert response.generation_mode == "deterministic"
+    assert response.answer == (
+        "If a shipment is delayed, contact support for an updated estimate."
+    )
+
+
+def test_explicit_synthetic_scope_reaches_only_evaluation_routing() -> None:
+    class RecordingRouter:
+        def __init__(self) -> None:
+            self.requests = []
+
+        def select(self, request):
+            self.requests.append(request)
+            return None
+
+    router = RecordingRouter()
+    provider = RoutedPolicyAnswerProvider(
+        router=router,
+        adapters={},
+        execution_mode="evaluation",
+        experiment_scope_key="experiment:synthetic",
+    )
+
+    response = answer_from_published_policy(
+        "shipment delayed",
+        response_provider=provider,
+        execution_scope="synthetic_evaluation",
+    )
+
+    assert response.generation_mode == "deterministic"
+    assert len(router.requests) == 1
+    assert router.requests[0].execution_mode == "evaluation"
 
 
 def test_trusted_factory_blocks_until_historical_provider_usage_is_reconciled() -> None:

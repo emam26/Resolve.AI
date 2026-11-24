@@ -9,6 +9,7 @@ from backend.app.ai.generation import (
     InvalidGeneratedAnswer,
     PolicyAnswerPrompt,
     PolicyAnswerProvider,
+    PromptExecutionScope,
     UntrustedCustomerMemory,
     authorized_evidence,
     build_policy_answer_prompt,
@@ -120,6 +121,7 @@ def answer_from_published_policy(
     policy_retriever: PolicyRetriever | None = None,
     response_provider: PolicyAnswerProvider | None = None,
     memory: Sequence[UntrustedCustomerMemory] = (),
+    execution_scope: PromptExecutionScope = "customer",
 ) -> GroundedAnswer:
     """Retrieve policy evidence and answer only when evidence is sufficient."""
 
@@ -190,7 +192,12 @@ def answer_from_published_policy(
             answer_texts=[_answer_text(item, corpus) for item in evidence],
         )
         try:
-            prompt = build_policy_answer_prompt(query, authorized, memory=memory)
+            prompt = build_policy_answer_prompt(
+                query,
+                authorized,
+                memory=memory,
+                execution_scope=execution_scope,
+            )
             generated = response_provider.generate(prompt)
             validated = validate_generated_answer(generated, authorized)
             answer = validated.answer

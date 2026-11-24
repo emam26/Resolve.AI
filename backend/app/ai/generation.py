@@ -126,6 +126,9 @@ class UntrustedCustomerMemory(BaseModel):
     ]
 
 
+PromptExecutionScope = Literal["customer", "synthetic_evaluation"]
+
+
 class PolicyAnswerPrompt(BaseModel):
     """Explicit untrusted-input boundary for an optional provider."""
 
@@ -135,6 +138,7 @@ class PolicyAnswerPrompt(BaseModel):
     query: str = Field(min_length=1, max_length=2000)
     evidence: list[AuthorizedPolicyEvidence] = Field(max_length=3)
     memory: list[UntrustedCustomerMemory] = Field(default_factory=list, max_length=5)
+    execution_scope: PromptExecutionScope = "customer"
     context_metadata: PromptContextMetadata = Field(default_factory=PromptContextMetadata)
 
 
@@ -169,6 +173,7 @@ def build_policy_answer_prompt(
     evidence: Sequence[AuthorizedPolicyEvidence],
     *,
     memory: Sequence[UntrustedCustomerMemory] = (),
+    execution_scope: PromptExecutionScope = "customer",
     context_budget_chars: int = 6000,
     query_budget_chars: int = 1200,
 ) -> PolicyAnswerPrompt:
@@ -297,6 +302,7 @@ def build_policy_answer_prompt(
         query=bounded_query,
         evidence=bounded_evidence,
         memory=bounded_memory,
+        execution_scope=execution_scope,
         context_metadata=metadata,
     )
 
@@ -387,6 +393,7 @@ __all__ = [
     "InvalidGeneratedAnswer",
     "PolicyAnswerPrompt",
     "PolicyAnswerProvider",
+    "PromptExecutionScope",
     "PromptContextMetadata",
     "UntrustedCustomerMemory",
     "authorized_evidence",

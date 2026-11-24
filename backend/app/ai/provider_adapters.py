@@ -19,7 +19,11 @@ from urllib.parse import quote, urlsplit
 
 import httpx
 
-from backend.app.ai.generation import GeneratedPolicyAnswer, PolicyAnswerPrompt
+from backend.app.ai.generation import (
+    GeneratedPolicyAnswer,
+    PolicyAnswerPrompt,
+    PromptExecutionScope,
+)
 from backend.app.ai.model_control import (
     AdaptiveModelRouter,
     RateLimitMetadata,
@@ -760,6 +764,8 @@ class RoutedPolicyAnswerProvider:
             raise ProviderConfigurationError(
                 "evaluation providers require a trusted experiment scope"
             )
+        if execution_mode not in {"customer", "evaluation"}:
+            raise ProviderConfigurationError("unknown provider execution mode")
         self._router = router
         self._adapters = dict(adapters)
         self._task_category = task_category
@@ -773,6 +779,13 @@ class RoutedPolicyAnswerProvider:
         self.last_model_key: str | None = None
 
     def generate(self, prompt: PolicyAnswerPrompt) -> object:
+        expected_scope: PromptExecutionScope = (
+            "synthetic_evaluation"
+            if self._execution_mode == "evaluation"
+            else "customer"
+        )
+        if prompt.execution_scope != expected_scope:
+            raise ProviderRequestError("router", "execution_scope_mismatch")
         started = perf_counter()
         prompt_tokens = _conservative_prompt_token_bound(prompt)
         reserved_tokens = (
